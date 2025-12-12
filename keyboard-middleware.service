@@ -1,0 +1,22 @@
+[Unit]
+Description=Keyboard Middleware - QMK-like features in userspace
+After=multi-user.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/keyboard-middleware
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening
+NoNewPrivileges=false
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/dev/input /dev/uinput
+
+[Install]
+WantedBy=multi-user.target

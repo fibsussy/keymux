@@ -1,0 +1,19 @@
+[package]
+name = "keyboard-middleware"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+evdev = "0.12"
+tokio = { version = "1.41", features = ["full"] }
+anyhow = "1.0"
+thiserror = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
