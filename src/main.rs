@@ -1,13 +1,16 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
-use dialoguer::Select;
-use evdev::{Device, Key};
 use std::collections::HashMap;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::io::Write;
 use std::time::Instant;
-use tracing::{debug, error, info};
+
+use evdev::Key;
 
 mod config;
+mod daemon;
+mod ipc;
+mod keyboard_id;
+mod keyboard_thread;
 mod niri;
 mod process_event_new;
 mod socd;
@@ -16,8 +19,6 @@ mod uinput;
 #[cfg(test)]
 mod tests;
 
-use niri::NiriEvent;
-use process_event_new::process_event;
 use socd::SocdCleaner;
 use uinput::VirtualKeyboard;
 
@@ -227,82 +228,6 @@ impl KeyboardState {
     }
 }
 
-async fn find_keyboard_device() -> Result<Device> {
-    let devices = evdev::enumerate();
-
-    info!("Scanning for keyboard devices...");
-
-    let mut keyboards = Vec::new();
-    let mut device_count = 0;
-
-    // List all devices and find keyboards
-    for (path, device) in devices {
-        device_count += 1;
-        let name = device.name().unwrap_or("unknown").to_string();
-        let has_keys = device.supported_keys().is_some();
-
-        info!("Device #{}: {} - {} (has_keys: {})", device_count, path.display(), name, has_keys);
-
-        if let Some(keys) = device.supported_keys() {
-            // Check if it has typical keyboard keys
-            let has_letter_keys = keys.contains(Key::KEY_A)
-                && keys.contains(Key::KEY_Z)
-                && keys.contains(Key::KEY_SPACE);
-
-            debug!("  KEY_A: {}, KEY_Z: {}, KEY_SPACE: {}",
-                   keys.contains(Key::KEY_A),
-                   keys.contains(Key::KEY_Z),
-                   keys.contains(Key::KEY_SPACE));
-
-            if has_letter_keys {
-                info!("  -> This is a keyboard!");
-                keyboards.push((path, device, name));
-            }
-        }
-    }
-
-    if keyboards.is_empty() {
-        anyhow::bail!(
-            "No keyboard device found.\n\
-             Possible solutions:\n\
-             1. Run with sudo: sudo cargo run\n\
-             2. Add your user to the 'input' group: sudo usermod -a -G input $USER (then log out/in)\n\
-             3. Run with RUST_LOG=debug to see all accessible devices\n\
-             \n\
-             Found {device_count} device(s) but none were keyboards with A-Z and SPACE keys."
-        );
-    }
-
-    // If only one keyboard, use it automatically
-    if keyboards.len() == 1 {
-        let (path, device, name) = keyboards.into_iter().next().unwrap();
-        info!("Using keyboard: {} ({})", name, path.display());
-        return Ok(device);
-    }
-
-    // Multiple keyboards - let user choose
-    info!("Found {} keyboards", keyboards.len());
-    println!("\nFound multiple keyboards:");
-
-    let items: Vec<String> = keyboards
-        .iter()
-        .enumerate()
-        .map(|(i, (path, _, name))| format!("{}. {} ({})", i + 1, name, path.display()))
-        .collect();
-
-    let selection = Select::new()
-        .with_prompt("Select keyboard to use")
-        .items(&items)
-        .default(0)
-        .interact()
-        .context("Failed to get keyboard selection")?;
-
-    let (path, device, name) = keyboards.into_iter().nth(selection).unwrap();
-    info!("Using keyboard: {} ({})", name, path.display());
-
-    Ok(device)
-}
-
 #[derive(Parser)]
 #[command(name = "keyboard-middleware")]
 #[command(about = "Multi-keyboard middleware with home row mods and game mode")]
@@ -317,6 +242,14 @@ enum Commands {
     Daemon,
     /// Set password for nav+backspace password typer
     SetPassword,
+    /// Check if daemon is running
+    Ping,
+    /// List all keyboards with their enabled/disabled status
+    ListKeyboards,
+    /// Interactively toggle which keyboards are enabled
+    ToggleKeyboards,
+    /// Shutdown the daemon
+    Shutdown,
 }
 
 fn get_config_path() -> std::path::PathBuf {
@@ -356,83 +289,184 @@ fn handle_set_password() -> Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn handle_ping() -> Result<()> {
+    let response = ipc::send_request(&ipc::IpcRequest::Ping)?;
+    match response {
+        ipc::IpcResponse::Pong => {
+            println!("✓ Daemon is running");
+            Ok(())
+        }
+        _ => anyhow::bail!("Unexpected response from daemon"),
+    }
+}
+
+fn handle_list_keyboards() -> Result<()> {
+    let response = ipc::send_request(&ipc::IpcRequest::ListKeyboards)?;
+    match response {
+        ipc::IpcResponse::KeyboardList(keyboards) => {
+            if keyboards.is_empty() {
+                println!("No keyboards detected");
+                return Ok(());
+            }
+
+            println!("\n\x1b[1mDetected keyboards:\x1b[0m\n");
+            for (i, kb) in keyboards.iter().enumerate() {
+                let (status_icon, status_text, status_color) = if !kb.connected {
+                    ("○", "disconnected", "\x1b[90m")
+                } else if kb.enabled {
+                    ("●", "enabled", "\x1b[32m")
+                } else {
+                    ("○", "disabled", "\x1b[90m")
+                };
+
+                println!("\x1b[1m{}\x1b[0m. {}{}\x1b[0m {} \x1b[90m[{}]\x1b[0m",
+                    i + 1,
+                    status_color,
+                    status_icon,
+                    kb.name,
+                    status_text
+                );
+                println!("   \x1b[90mID: {}\x1b[0m", kb.hardware_id);
+                if kb.connected {
+                    println!("   \x1b[90mPath: {}\x1b[0m", kb.device_path);
+                }
+                println!();
+            }
+
+            Ok(())
+        }
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        _ => anyhow::bail!("Unexpected response from daemon"),
+    }
+}
+
+fn handle_toggle_keyboards() -> Result<()> {
+    // Get current keyboard list
+    let response = ipc::send_request(&ipc::IpcRequest::ToggleKeyboards)?;
+    let keyboards = match response {
+        ipc::IpcResponse::KeyboardList(kb) => kb,
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        _ => anyhow::bail!("Unexpected response from daemon"),
+    };
+
+    if keyboards.is_empty() {
+        println!("No keyboards detected");
+        return Ok(());
+    }
+
+    // Show current state
+    println!("\n\x1b[1m━━━ Keyboard Configuration ━━━\x1b[0m\n");
+    println!("Current state:");
+    for kb in &keyboards {
+        let status_color = if kb.enabled { "\x1b[32m" } else { "\x1b[90m" };
+        let status_icon = if kb.enabled { "●" } else { "○" };
+        println!("  {} {} {}\x1b[0m", status_color, status_icon, kb.name);
+    }
+
+    // Show interactive multi-select
+    println!("\n\x1b[1mSelect keyboards to enable\x1b[0m (Space=toggle, Enter=confirm):\n");
+
+    let items: Vec<String> = keyboards
+        .iter()
+        .map(|kb| format!("  {}", kb.name))
+        .collect();
+
+    let defaults: Vec<bool> = keyboards.iter().map(|kb| kb.enabled).collect();
+
+    let selections = dialoguer::MultiSelect::new()
+        .items(&items)
+        .defaults(&defaults)
+        .interact()?;
+
+    // Apply changes
+    println!(); // Blank line before changes
+    let mut changes_made = false;
+
+    for (i, kb) in keyboards.iter().enumerate() {
+        let should_enable = selections.contains(&i);
+        let currently_enabled = kb.enabled;
+
+        if should_enable && !currently_enabled {
+            // Enabling a keyboard
+            print!("  \x1b[32m●\x1b[0m Enabling {}... ", kb.name);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let response = ipc::send_request(&ipc::IpcRequest::EnableKeyboard(kb.hardware_id.clone()))?;
+            if let ipc::IpcResponse::Error(e) = response {
+                println!("\x1b[31m✗ Failed: {}\x1b[0m", e);
+            } else {
+                println!("\x1b[32m✓\x1b[0m");
+                changes_made = true;
+            }
+        } else if !should_enable && currently_enabled {
+            // Disabling a keyboard
+            print!("  \x1b[90m○\x1b[0m Disabling {}... ", kb.name);
+            std::io::Write::flush(&mut std::io::stdout())?;
+            let response = ipc::send_request(&ipc::IpcRequest::DisableKeyboard(kb.hardware_id.clone()))?;
+            if let ipc::IpcResponse::Error(e) = response {
+                println!("\x1b[31m✗ Failed: {}\x1b[0m", e);
+            } else {
+                println!("\x1b[90m✓\x1b[0m");
+                changes_made = true;
+            }
+        }
+        // If should_enable == currently_enabled, no change needed (don't print anything)
+    }
+
+    if changes_made {
+        println!("\n\x1b[32m✓ Configuration updated successfully\x1b[0m\n");
+    } else {
+        println!("\n\x1b[90mNo changes made\x1b[0m\n");
+    }
+
+    Ok(())
+}
+
+fn handle_shutdown() -> Result<()> {
+    let response = ipc::send_request(&ipc::IpcRequest::Shutdown)?;
+    match response {
+        ipc::IpcResponse::Ok => {
+            println!("✓ Daemon shutdown requested");
+            Ok(())
+        }
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        _ => anyhow::bail!("Unexpected response from daemon"),
+    }
+}
+
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        // Client commands
         Some(Commands::SetPassword) => {
             return handle_set_password();
         }
+        Some(Commands::Ping) => {
+            return handle_ping();
+        }
+        Some(Commands::ListKeyboards) => {
+            return handle_list_keyboards();
+        }
+        Some(Commands::ToggleKeyboards) => {
+            return handle_toggle_keyboards();
+        }
+        Some(Commands::Shutdown) => {
+            return handle_shutdown();
+        }
+        // Daemon mode
         Some(Commands::Daemon) | None => {
-            // Continue to daemon mode below
+            // Initialize tracing for daemon
+            tracing_subscriber::fmt::init();
+
+            // Load config
+            let config_path = get_config_path();
+            let config = config::Config::load_or_default(&config_path);
+
+            // Create and run daemon
+            let mut daemon = daemon::Daemon::new(config, config_path)?;
+            daemon.run()?;
         }
     }
 
-    tracing_subscriber::fmt::init();
-
-    info!("Starting keyboard middleware");
-
-    // Load config
-    let config_path = get_config_path();
-    let config = config::Config::load_or_default(&config_path);
-    if config.password.is_some() {
-        info!("Password configured for nav+backspace");
-    }
-
-    // Find keyboard device
-    let mut device = find_keyboard_device().await?;
-    info!("Using device: {}", device.name().unwrap_or("unknown"));
-
-    // Grab the device to intercept all events
-    device
-        .grab()
-        .context("Failed to grab keyboard device. Are you running as root?")?;
-
-    // Create virtual keyboard
-    let mut vkbd = VirtualKeyboard::new().context("Failed to create virtual keyboard")?;
-
-    // Initialize state
-    let mut state = KeyboardState::new(config.password);
-
-    // Start niri monitor for gamescope detection
-    let (niri_tx, niri_rx): (_, Receiver<NiriEvent>) = mpsc::channel();
-    niri::start_niri_monitor(niri_tx);
-    info!("Niri monitor started for gamescope detection");
-
-    info!("Keyboard middleware ready");
-
-    // Main event loop
-    loop {
-        // Check for niri events (non-blocking)
-        match niri_rx.try_recv() {
-            Ok(NiriEvent::WindowFocusChanged(app_id)) => {
-                let should_enable = niri::should_enable_gamemode(app_id.as_deref());
-                if should_enable && !state.game_mode {
-                    info!("🎮 Entering game mode (gamescope detected)");
-                    state.game_mode = true;
-                    state.layers = vec![Layer::Base, Layer::Game];
-                } else if !should_enable && state.game_mode {
-                    info!("💻 Exiting game mode (left gamescope)");
-                    state.game_mode = false;
-                    state.layers = vec![Layer::Base, Layer::HomeRowMod];
-                    state.socd_cleaner.reset();
-                }
-            }
-            Err(TryRecvError::Empty) => {
-                // No niri events, continue
-            }
-            Err(TryRecvError::Disconnected) => {
-                error!("Niri monitor disconnected");
-            }
-        }
-
-        let events = device.fetch_events().context("Failed to fetch events")?;
-
-        for event in events {
-            if let Err(e) = process_event(event, &mut state, &mut vkbd).await {
-                error!("Error processing event: {}", e);
-            }
-        }
-    }
+    Ok(())
 }
