@@ -35,7 +35,7 @@ impl KeyboardThread {
         niri_rx: Receiver<NiriEvent>,
         password: Option<String>,
         key_remapping: KeyRemapping,
-    ) -> Result<Self> {
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
@@ -60,13 +60,13 @@ impl KeyboardThread {
 
         info!("Started keyboard thread: {} ({})", name, keyboard_id);
 
-        Ok(Self {
+        Self {
             keyboard_id,
             name,
             handle: Some(handle),
             command_tx,
             running,
-        })
+        }
     }
 
     /// Main keyboard processing loop
@@ -97,7 +97,7 @@ impl KeyboardThread {
         // Main event loop
         loop {
             // Check for shutdown command
-            if let Ok(ThreadCommand::Shutdown) = command_rx.try_recv() {
+            if matches!(command_rx.try_recv(), Ok(ThreadCommand::Shutdown)) {
                 info!("Keyboard thread {} received shutdown command", name);
                 break;
             }
@@ -154,7 +154,7 @@ impl KeyboardThread {
     }
 
     /// Request thread to shutdown
-    pub fn shutdown(&mut self) {
+    pub fn shutdown(&self) {
         self.running.store(false, Ordering::Relaxed);
         let _ = self.command_tx.send(ThreadCommand::Shutdown);
     }

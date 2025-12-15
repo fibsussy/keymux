@@ -72,7 +72,7 @@ impl VirtualKeyboard {
     }
 
     #[inline]
-    pub fn update_socd_keys(&mut self, new_keys: &[Option<Key>; 2]) -> Result<()> {
+    pub fn update_socd_keys(&mut self, new_keys: [Option<Key>; 2]) -> Result<()> {
         // Ultra-optimized: batch ALL events into single emit
         let mut events = SmallVec::<[InputEvent; 8]>::new();
 
@@ -88,7 +88,7 @@ impl VirtualKeyboard {
         }
 
         // Press keys that are newly active
-        for &new_key_opt in new_keys {
+        for new_key_opt in new_keys {
             if let Some(new_key) = new_key_opt {
                 // Check if this key was already active
                 if !self.active_socd_keys.contains(&Some(new_key)) {
@@ -104,7 +104,7 @@ impl VirtualKeyboard {
         }
 
         // Update state (direct copy)
-        self.active_socd_keys = *new_keys;
+        self.active_socd_keys = new_keys;
         Ok(())
     }
 
@@ -208,7 +208,7 @@ impl VirtualKeyboard {
     }
 }
 
-fn char_to_key(ch: char) -> (Key, bool) {
+const fn char_to_key(ch: char) -> (Key, bool) {
     match ch {
         'a' => (Key::KEY_A, false),
         'b' => (Key::KEY_B, false),

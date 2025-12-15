@@ -9,10 +9,10 @@ use crate::{KeyboardState, Action, KeyAction, VirtualKeyboard};
 // Branch prediction hints for hot path optimization
 #[inline(always)]
 #[cold]
-fn cold() {}
+const fn cold() {}
 
 #[inline(always)]
-fn likely(b: bool) -> bool {
+const fn likely(b: bool) -> bool {
     if !b {
         cold();
     }
@@ -20,7 +20,7 @@ fn likely(b: bool) -> bool {
 }
 
 #[inline(always)]
-fn unlikely(b: bool) -> bool {
+const fn unlikely(b: bool) -> bool {
     if b {
         cold();
     }
@@ -62,15 +62,14 @@ pub fn process_event(
         }
 
         // Track Left Alt for nav layer (disabled in game mode, passes through as regular key)
-        if unlikely(key == Key::KEY_LEFTALT) {
-            if likely(!state.game_mode) {
+        if unlikely(key == Key::KEY_LEFTALT)
+            && likely(!state.game_mode) {
                 state.nav_layer_active = true;
                 key_action.add(Action::NavLayerActivation);
                 state.insert_held_key(key, key_action);
                 return Ok(());
             }
             // In game mode, treat as regular key (will be handled below)
-        }
 
         // === GAME MODE HANDLING ===
         // Game mode is controlled ONLY by niri monitor
@@ -127,17 +126,13 @@ pub fn process_event(
                     key_action.add(Action::RegularKey(Key::KEY_RIGHT));
                 }
                 // Mouse buttons
-                Key::KEY_UP => {
+                Key::KEY_UP | Key::KEY_DOWN => {
                     vkbd.press_key(Key::BTN_MIDDLE)?;
                     key_action.add(Action::RegularKey(Key::BTN_MIDDLE));
                 }
                 Key::KEY_LEFT => {
                     vkbd.press_key(Key::BTN_LEFT)?;
                     key_action.add(Action::RegularKey(Key::BTN_LEFT));
-                }
-                Key::KEY_DOWN => {
-                    vkbd.press_key(Key::BTN_MIDDLE)?;
-                    key_action.add(Action::RegularKey(Key::BTN_MIDDLE));
                 }
                 Key::KEY_RIGHT => {
                     vkbd.press_key(Key::BTN_RIGHT)?;
@@ -303,7 +298,7 @@ pub fn process_event(
 
 /// Apply key remapping based on configuration
 #[inline(always)]
-fn apply_key_remapping(key: Key, remapping: &crate::config::KeyRemapping) -> Key {
+const fn apply_key_remapping(key: Key, remapping: &crate::config::KeyRemapping) -> Key {
     match key {
         Key::KEY_CAPSLOCK => {
             if remapping.caps_to_esc {

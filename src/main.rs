@@ -65,7 +65,7 @@ impl KeyAction {
     }
 
     #[inline(always)]
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             actions: [None, None],
             count: 0,
@@ -73,18 +73,18 @@ impl KeyAction {
     }
 
     #[inline(always)]
-    fn add(&mut self, action: Action) {
+    const fn add(&mut self, action: Action) {
         self.actions[self.count as usize] = Some(action);
         self.count += 1;
     }
 
     #[inline(always)]
-    fn is_occupied(&self) -> bool {
+    const fn is_occupied(&self) -> bool {
         self.count > 0
     }
 
     #[inline(always)]
-    fn clear(&mut self) {
+    const fn clear(&mut self) {
         self.actions = [None, None];
         self.count = 0;
     }
@@ -104,12 +104,12 @@ struct ModifierState {
 
 impl ModifierState {
     #[inline(always)]
-    fn new() -> Self {
+    const fn new() -> Self {
         Self { counts: [0; 8] }
     }
 
     #[inline(always)]
-    fn modifier_index(key: Key) -> Option<usize> {
+    const fn modifier_index(key: Key) -> Option<usize> {
         match key {
             Key::KEY_LEFTSHIFT => Some(0),
             Key::KEY_RIGHTSHIFT => Some(1),
@@ -152,14 +152,14 @@ impl ModifierState {
     }
 
     #[inline(always)]
-    fn increment(&mut self, key: Key) {
+    const fn increment(&mut self, key: Key) {
         if let Some(idx) = Self::modifier_index(key) {
             self.counts[idx] = self.counts[idx].saturating_add(1);
         }
     }
 
     #[inline(always)]
-    fn decrement(&mut self, key: Key) -> bool {
+    const fn decrement(&mut self, key: Key) -> bool {
         if let Some(idx) = Self::modifier_index(key) {
             if self.counts[idx] > 0 {
                 self.counts[idx] -= 1;
@@ -281,14 +281,14 @@ impl KeyboardState {
     // Check if a home row mod key is pending
     #[inline(always)]
     #[must_use]
-    fn is_hrm_pending(&self, key: Key) -> bool {
+    const fn is_hrm_pending(&self, key: Key) -> bool {
         let bit = Self::hrm_key_to_bit(key);
         bit < 8 && (self.pending_hrm_keys & (1 << bit)) != 0
     }
 
     // Set a home row mod key as pending
     #[inline(always)]
-    fn set_hrm_pending(&mut self, key: Key) {
+    const fn set_hrm_pending(&mut self, key: Key) {
         let bit = Self::hrm_key_to_bit(key);
         if bit < 8 {
             self.pending_hrm_keys |= 1 << bit;
@@ -297,7 +297,7 @@ impl KeyboardState {
 
     // Clear a home row mod key from pending
     #[inline(always)]
-    fn clear_hrm_pending(&mut self, key: Key) {
+    const fn clear_hrm_pending(&mut self, key: Key) {
         let bit = Self::hrm_key_to_bit(key);
         if bit < 8 {
             self.pending_hrm_keys &= !(1 << bit);
@@ -402,9 +402,7 @@ enum Commands {
 }
 
 fn get_config_path() -> std::path::PathBuf {
-    dirs::config_dir()
-        .map(|p| p.join("keyboard-middleware").join("config.toml"))
-        .unwrap_or_else(|| std::path::PathBuf::from("config.toml"))
+    dirs::config_dir().map_or_else(|| std::path::PathBuf::from("config.toml"), |p| p.join("keyboard-middleware").join("config.toml"))
 }
 
 fn handle_set_password() -> Result<()> {
@@ -484,7 +482,7 @@ fn handle_list_keyboards() -> Result<()> {
 
             Ok(())
         }
-        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {e}"),
         _ => anyhow::bail!("Unexpected response from daemon"),
     }
 }
@@ -494,7 +492,7 @@ fn handle_toggle_keyboards() -> Result<()> {
     let response = ipc::send_request(&ipc::IpcRequest::ToggleKeyboards)?;
     let keyboards = match response {
         ipc::IpcResponse::KeyboardList(kb) => kb,
-        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {e}"),
         _ => anyhow::bail!("Unexpected response from daemon"),
     };
 
@@ -541,7 +539,7 @@ fn handle_toggle_keyboards() -> Result<()> {
             std::io::Write::flush(&mut std::io::stdout())?;
             let response = ipc::send_request(&ipc::IpcRequest::EnableKeyboard(kb.hardware_id.clone()))?;
             if let ipc::IpcResponse::Error(e) = response {
-                println!("\x1b[31m✗ Failed: {}\x1b[0m", e);
+                println!("\x1b[31m✗ Failed: {e}\x1b[0m");
             } else {
                 println!("\x1b[32m✓\x1b[0m");
                 changes_made = true;
@@ -552,7 +550,7 @@ fn handle_toggle_keyboards() -> Result<()> {
             std::io::Write::flush(&mut std::io::stdout())?;
             let response = ipc::send_request(&ipc::IpcRequest::DisableKeyboard(kb.hardware_id.clone()))?;
             if let ipc::IpcResponse::Error(e) = response {
-                println!("\x1b[31m✗ Failed: {}\x1b[0m", e);
+                println!("\x1b[31m✗ Failed: {e}\x1b[0m");
             } else {
                 println!("\x1b[90m✓\x1b[0m");
                 changes_made = true;
@@ -577,7 +575,7 @@ fn handle_shutdown() -> Result<()> {
             println!("✓ Daemon shutdown requested");
             Ok(())
         }
-        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {}", e),
+        ipc::IpcResponse::Error(e) => anyhow::bail!("Error: {e}"),
         _ => anyhow::bail!("Unexpected response from daemon"),
     }
 }

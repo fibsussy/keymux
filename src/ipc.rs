@@ -114,7 +114,7 @@ impl IpcServer {
     }
 
     /// Try to accept a connection (non-blocking)
-    pub fn try_accept(&mut self) -> Result<Option<(IpcRequest, UnixStream)>> {
+    pub fn try_accept(&self) -> Result<Option<(IpcRequest, UnixStream)>> {
         match self.listener.accept() {
             Ok((mut stream, _)) => {
                 // Read request length

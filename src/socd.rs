@@ -2,7 +2,7 @@ use evdev::Key;
 
 /// SOCD (Simultaneous Opposite Cardinal Directions) Cleaner
 /// Implements "last input priority" to prevent impossible inputs in games
-/// Uses simple array instead of HashSet for TRUE O(1) operations
+/// Uses simple array instead of `HashSet` for TRUE O(1) operations
 pub struct SocdCleaner {
     w_held: bool,
     a_held: bool,
@@ -38,7 +38,7 @@ impl SocdCleaner {
     }
 
     #[inline]
-    pub fn handle_press(&mut self, key: Key) -> &[Option<Key>; 2] {
+    pub const fn handle_press(&mut self, key: Key) -> [Option<Key>; 2] {
         match key {
             Key::KEY_W => {
                 self.w_held = true;
@@ -63,7 +63,7 @@ impl SocdCleaner {
     }
 
     #[inline]
-    pub fn handle_release(&mut self, key: Key) -> &[Option<Key>; 2] {
+    pub const fn handle_release(&mut self, key: Key) -> [Option<Key>; 2] {
         match key {
             Key::KEY_W => self.w_held = false,
             Key::KEY_A => self.a_held = false,
@@ -76,7 +76,7 @@ impl SocdCleaner {
     }
 
     #[inline]
-    fn compute_active_keys(&mut self) -> &[Option<Key>; 2] {
+    const fn compute_active_keys(&mut self) -> [Option<Key>; 2] {
         // Array index 0 = vertical key, 1 = horizontal key
 
         // Vertical resolution
@@ -103,7 +103,7 @@ impl SocdCleaner {
             self.active_keys[1] = None;
         }
 
-        &self.active_keys
+        self.active_keys
     }
 }
 

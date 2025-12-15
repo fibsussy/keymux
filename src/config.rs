@@ -27,7 +27,7 @@ pub struct KeyRemapping {
     pub esc_to_grave: bool,
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
