@@ -25,12 +25,22 @@ fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Hidden --daemon flag for systemd service
+    if cli.daemon {
+        return cli::handle_start();
+    }
+
+    // Normal subcommand handling
     match cli.command {
-        Commands::Start => cli::handle_start(),
-        Commands::Stop => cli::handle_stop(),
-        Commands::Status => cli::handle_status(),
-        Commands::List => cli::handle_list(),
-        Commands::Toggle => cli::handle_toggle(),
-        Commands::SetPassword => cli::handle_set_password(),
+        Some(Commands::Start) => cli::handle_start(),
+        Some(Commands::Stop) => cli::handle_stop(),
+        Some(Commands::Status) => cli::handle_status(),
+        Some(Commands::List) => cli::handle_list(),
+        Some(Commands::Toggle) => cli::handle_toggle(),
+        Some(Commands::SetPassword) => cli::handle_set_password(),
+        None => {
+            eprintln!("No command specified. Use --help for usage information.");
+            std::process::exit(1);
+        }
     }
 }

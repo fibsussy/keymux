@@ -11,8 +11,12 @@ use crate::ipc::{self, IpcRequest, IpcResponse};
 #[command(name = "keyboard-middleware")]
 #[command(about = "Keyboard middleware with home row mods, SOCD, and game mode")]
 pub struct Cli {
+    /// Hidden daemon flag for systemd service (use 'start' command instead)
+    #[arg(long, hide = true)]
+    pub daemon: bool,
+
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
