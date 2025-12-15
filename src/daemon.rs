@@ -1,5 +1,7 @@
 use anyhow::Result;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::Duration;
@@ -9,7 +11,14 @@ use crate::config::Config;
 use crate::ipc::{IpcRequest, IpcResponse, IpcServer, KeyboardInfo};
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 use crate::keyboard_thread::KeyboardThread;
-use crate::niri::{self, NiriEvent};
+use crate::niri;
+
+/// Hotplug event from udev monitor
+#[derive(Debug)]
+enum HotplugEvent {
+    Added,
+    Removed,
+}
 
 /// Main daemon orchestrator
 pub struct Daemon {
@@ -21,9 +30,8 @@ pub struct Daemon {
     all_keyboards: HashMap<KeyboardId, KeyboardMeta>,
     /// IPC server
     ipc_server: IpcServer,
-    /// Niri event broadcaster
-    niri_tx: Sender<NiriEvent>,
-    niri_rx: Receiver<NiriEvent>,
+    /// Hotplug event receiver
+    hotplug_rx: Receiver<HotplugEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -33,10 +41,86 @@ struct KeyboardMeta {
     connected: bool,
 }
 
+/// Start udev monitor for keyboard hotplug events
+fn start_udev_monitor(tx: Sender<HotplugEvent>) {
+    thread::spawn(move || {
+        loop {
+            info!("Starting udevadm monitor for input device hotplug");
+
+            let mut child = match Command::new("udevadm")
+                .args(&["monitor", "--subsystem-match=input"])
+                .stdout(Stdio::piped())
+                .spawn() {
+                Ok(child) => child,
+                Err(e) => {
+                    error!("Failed to spawn udevadm: {}", e);
+                    error!("Retrying in 5 seconds...");
+                    thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+            };
+
+            let stdout = match child.stdout.take() {
+                Some(stdout) => stdout,
+                None => {
+                    error!("Failed to capture udevadm stdout");
+                    thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
+            };
+
+            let reader = BufReader::new(stdout);
+
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(line) => line,
+                    Err(e) => {
+                        error!("Error reading udevadm output: {}", e);
+                        break;
+                    }
+                };
+
+                // Parse lines like: "KERNEL[12345.678] add      /devices/.../input/input123/event4 (input)"
+                // or: "KERNEL[12345.678] remove   /devices/.../input/input123 (input)"
+
+                if !line.starts_with("KERNEL[") {
+                    continue;
+                }
+
+                let is_add = line.contains("] add ");
+                let is_remove = line.contains("] remove ");
+
+                if !is_add && !is_remove {
+                    continue;
+                }
+
+                // Only care about events with "event" in the path (actual input devices)
+                if !line.contains("/event") {
+                    continue;
+                }
+
+                if is_add {
+                    debug!("[udev] Input device added");
+                    let _ = tx.send(HotplugEvent::Added);
+                } else if is_remove {
+                    debug!("[udev] Input device removed");
+                    let _ = tx.send(HotplugEvent::Removed);
+                }
+            }
+
+            warn!("udevadm monitor process ended, restarting in 5 seconds...");
+            thread::sleep(Duration::from_secs(5));
+        }
+    });
+}
+
 impl Daemon {
     pub fn new(config: Config, config_path: std::path::PathBuf) -> Result<Self> {
         let ipc_server = IpcServer::new()?;
-        let (niri_tx, niri_rx) = mpsc::channel();
+        let (hotplug_tx, hotplug_rx) = mpsc::channel();
+
+        // Start udev monitor in background
+        start_udev_monitor(hotplug_tx);
 
         Ok(Self {
             config,
@@ -44,19 +128,13 @@ impl Daemon {
             threads: HashMap::new(),
             all_keyboards: HashMap::new(),
             ipc_server,
-            niri_tx,
-            niri_rx,
+            hotplug_rx,
         })
     }
 
     /// Start the daemon
     pub fn run(&mut self) -> Result<()> {
         info!("Starting keyboard middleware daemon");
-
-        // Start niri monitor
-        let niri_tx = self.niri_tx.clone();
-        niri::start_niri_monitor(niri_tx);
-        info!("Niri monitor started");
 
         // Discover and start keyboard threads
         self.discover_keyboards()?;
@@ -75,10 +153,7 @@ impl Daemon {
               self.threads.len(),
               self.all_keyboards.len());
 
-        let mut last_hotplug_check = std::time::Instant::now();
-        let hotplug_interval = Duration::from_secs(2);
-
-        // Main daemon loop
+        // Main daemon loop - event-driven, no polling!
         loop {
             // Handle IPC requests
             if let Some((request, stream)) = self.ipc_server.try_accept()? {
@@ -95,13 +170,24 @@ impl Daemon {
                 }
             }
 
-            // Periodic hotplug detection (check every 2 seconds)
-            if last_hotplug_check.elapsed() >= hotplug_interval {
-                if let Err(e) = self.handle_hotplug() {
-                    error!("Hotplug check failed: {}", e);
+            // Check for hotplug events from udev (non-blocking)
+            match self.hotplug_rx.try_recv() {
+                Ok(HotplugEvent::Added) | Ok(HotplugEvent::Removed) => {
+                    // Keyboard added or removed - rediscover
+                    debug!("Hotplug event detected, rediscovering keyboards");
+                    if let Err(e) = self.handle_hotplug() {
+                        error!("Hotplug handling failed: {}", e);
+                    }
                 }
-                last_hotplug_check = std::time::Instant::now();
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // No hotplug event, continue
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    warn!("Hotplug monitor died, continuing without hotplug support");
+                }
             }
+
+            // Note: Niri events are handled by individual keyboard threads, not here
 
             // Clean up dead threads
             self.cleanup_dead_threads();

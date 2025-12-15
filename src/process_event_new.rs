@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use evdev::{InputEvent, EventType, Key};
-use smallvec::SmallVec;
 use tracing::info;
 
 use crate::{KeyboardState, Action, KeyAction, VirtualKeyboard};
