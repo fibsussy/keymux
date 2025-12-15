@@ -1,203 +1,223 @@
 # Keyboard Middleware
 
-A Rust userspace keyboard middleware that intercepts keyboard events and re-emits them through uinput, providing QMK-like functionality for any keyboard without flashing firmware.
+A multi-keyboard middleware daemon for Linux that provides:
+
+- **Home Row Mods**: A/S/D/F and J/K/L/; act as modifiers when held, letters when tapped
+- **SOCD Cleaner**: Last-input-priority for WASD in game mode
+- **Game Mode**: Automatic detection via niri window manager (gamescope = game mode)
+- **Per-Window Overrides**: Press both shifts to override game mode for specific windows (tracked by PID)
+- **Nav Layer**: Left Alt + HJKL for arrow keys, ASDF for modifiers
+- **Multi-keyboard Support**: Handle multiple physical keyboards simultaneously
+- **Hotplug Support**: Automatically detect keyboard connect/disconnect via udev
+- **Per-keyboard Configuration**: Enable/disable individual keyboards
 
 ## Features
 
-- **Home Row Mods**: Convert home row keys (ASDF/JKL;) into modifiers when held, or regular keys when tapped
-  - A → GUI/Super, S → Alt, D → Ctrl, F → Shift (left hand)
-  - J → Shift, K → Ctrl, L → Alt, ; → GUI/Super (right hand)
-  - Configurable tapping term (default 130ms)
-  - Permissive hold behavior for quick typing
-
-- **SOCD Cleaner**: Simultaneous Opposite Cardinal Direction cleaning for gaming
-  - Last-input-priority for W/S and A/D
-  - Prevents impossible inputs in competitive games
-  - Automatically resolves conflicting directional inputs
-
-- **Game Mode Auto-Detection**: Automatically enters game mode when rapid WASD alternation is detected
-  - Exits on GUI/Alt key press
-  - Disables home row mods in game mode
-  - Enables SOCD cleaning for WASD keys
-
-- **Layer System**: Multiple keyboard layers (currently supporting Base, HomeRowMod, Game)
-
-## Requirements
-
-- Linux with evdev and uinput support
-- Root/sudo access (required to grab keyboard device and create virtual device)
-- Rust 1.70+ (for building)
-
-## Building
-
-```bash
-cargo build --release
-```
-
-The binary will be in `target/release/keyboard-middleware`.
+- Caps Lock → Escape
+- Escape → Caps Lock
+- 130ms tapping term for home row mods
+- IPC-based daemon/client architecture
+- Systemd user service integration
+- **Safe Eject**: Press Equals (=) key to release all modifiers and shut down daemon
 
 ## Installation
 
-### Permissions Setup (Important!)
+### Quick Install (Recommended)
 
-The middleware needs access to `/dev/input/*` devices. You have two options:
+Run the installation script:
 
-**Option A: Add user to input group** (recommended for development):
+```bash
+./install.sh
+```
+
+This will:
+- Build the package with makepkg
+- Install it with pacman
+- Enable and start the systemd service
+- Automatically clean up build artifacts
+- Rollback on failure (atomic installation)
+
+**Note**: Add yourself to the `input` group first:
 ```bash
 sudo usermod -a -G input $USER
 # Then log out and log back in
 ```
 
-**Option B: Run as root** (easier for testing):
-```bash
-sudo ./target/release/keyboard-middleware
-```
+### Manual Installation
 
-### Build and Install
+#### Build from source
 
-1. Build the project:
 ```bash
 cargo build --release
+sudo cp target/release/keyboard-middleware /usr/bin/
 ```
 
-2. Copy the binary to a system location:
+#### Install as Arch Linux package
+
 ```bash
-sudo cp target/release/keyboard-middleware /usr/local/bin/
+makepkg -si
 ```
 
-3. Create a systemd service (optional but recommended):
+This will install the binary to `/usr/bin/keyboard-middleware` and the systemd service to `/usr/lib/systemd/user/keyboard-middleware.service`.
+
+#### Enable systemd service
+
 ```bash
-sudo tee /etc/systemd/system/keyboard-middleware.service << EOF
-[Unit]
-Description=Keyboard Middleware
-After=multi-user.target
+# Add your user to the input group (required for device access)
+sudo usermod -a -G input $USER
 
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/keyboard-middleware
-Restart=always
-RestartSec=5
+# Log out and log back in for group membership to take effect
 
-[Install]
-WantedBy=multi-user.target
-EOF
-```
+# Enable and start the service
+systemctl --user enable keyboard-middleware
+systemctl --user start keyboard-middleware
 
-4. Enable and start the service:
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable keyboard-middleware
-sudo systemctl start keyboard-middleware
+# Check status
+systemctl --user status keyboard-middleware
 ```
 
 ## Usage
 
-### Running Manually
-
-Run with sudo/root privileges:
+### Daemon Commands
 
 ```bash
-sudo ./target/release/keyboard-middleware
+# Start daemon (usually done via systemd - default if no command specified)
+keyboard-middleware
+keyboard-middleware daemon
 ```
 
-The middleware will:
-1. Find your keyboard device automatically
-2. Grab the device (intercept all events)
-3. Create a virtual keyboard
-4. Start processing events
+### Management Commands
 
-### Checking Status
-
-View logs:
 ```bash
-sudo journalctl -u keyboard-middleware -f
+# Set password for nav+backspace password typer (interactive prompt)
+keyboard-middleware set-password
 ```
 
 ### Configuration
 
-Currently, configuration is hardcoded but can be modified in `src/main.rs`:
+Configuration is stored at `~/.config/keyboard-middleware/config.toml`:
 
-- `TAPPING_TERM_MS`: Time in milliseconds to distinguish tap from hold (default 130ms)
-- Home row mod mappings: In `KeyboardState::init_home_row_mods()`
-- Game mode detection threshold: In `KeyboardState::check_game_mode_entry()`
-
-## How It Works
-
-1. **Event Capture**: The middleware grabs your physical keyboard using evdev, intercepting all key events
-
-2. **Event Processing**:
-   - Home row keys are held in a pending state for the tapping term
-   - If another key is pressed (permissive hold), the home row key becomes a modifier
-   - If released quickly, it's emitted as a regular keypress
-   - In game mode, WASD keys go through SOCD cleaning
-
-3. **Event Emission**: Processed events are emitted through a uinput virtual keyboard that the system sees as a normal keyboard
-
-## Architecture
-
-```
-Physical Keyboard → evdev (grabbed) → Middleware Processing → uinput Virtual Keyboard → System
-                                           ↓
-                                    ┌──────┴──────┐
-                                    │  Processing  │
-                                    ├─────────────┤
-                                    │ Home Row Mod │
-                                    │ SOCD Cleaner │
-                                    │ Game Mode    │
-                                    │ Layer System │
-                                    └─────────────┘
+```toml
+tapping_term_ms = 130
+enable_game_mode_auto = true
+enable_socd = true
+password = "your-password-here"
 ```
 
-## Differences from QMK Firmware
+**Password configuration**: Set the `password` field to enable the password typer (Nav + Backspace). The password can contain letters, numbers, and common symbols.
 
-**Advantages:**
-- Works on any keyboard without flashing
-- Easy to modify and test (just recompile Rust code)
-- Can use system debugging tools
-- Cross-device compatible
+**Note**: After changing which keyboards are enabled via `toggle-keyboards`, restart the daemon for changes to take effect:
 
-**Limitations:**
-- Requires running as root/sudo
-- Slightly higher latency than firmware (typically <1-2ms, imperceptible)
-- Can't work in BIOS/bootloader
-- Requires the OS to be running
+```bash
+systemctl --user restart keyboard-middleware
+```
+
+## Home Row Mods Layout
+
+### Left Hand
+- A → Super/Meta (when held)
+- S → Alt (when held)
+- D → Ctrl (when held)
+- F → Shift (when held)
+
+### Right Hand
+- J → Shift (when held)
+- K → Ctrl (when held)
+- L → Alt (when held)
+- ; → Super/Meta (when held)
+
+## Nav Layer
+
+Hold Left Alt to activate the navigation layer:
+
+### Arrow Keys
+- H → Left
+- J → Down
+- K → Up
+- L → Right
+
+### Modifiers (when in nav layer)
+- A → Super/Meta
+- S → Alt
+- D → Ctrl
+- F → Shift
+
+### Mouse Buttons (arrow key cluster)
+- Arrow Up → Middle Click
+- Arrow Left → Left Click
+- Arrow Down → Middle Click
+- Arrow Right → Right Click
+
+### Password Typer
+- Left Alt + Backspace (first press) → Type configured password
+- Left Alt + Backspace (subsequent presses) → Press Enter
+- State resets when leaving nav layer (releasing Left Alt)
+
+## Game Mode
+
+### Niri Window Manager Integration (Automatic Only)
+
+Game mode is **only** controlled by the niri monitor watching window focus:
+
+**Automatic behavior:**
+- `gamescope` windows → Game mode **ON**
+  - Left hand home row mods (ASDF) **disabled** → keys pass through for WASD gaming
+  - Right hand home row mods (JKL;) **still active** → modifiers available while gaming
+  - Nav layer (Left Alt) **disabled** → Alt passes through as regular key
+  - SOCD cleaner **enabled** for WASD (last-input-priority)
+- All other windows → Game mode **OFF**
+  - All home row mods active
+  - Nav layer active
+
+**No manual controls:** Game mode cannot be toggled manually - it is purely automatic based on which window has focus.
+
+## Safe Eject
+
+**Emergency shutdown**: Press the **Equals (=)** key to immediately:
+- Release all held modifiers
+- Shut down the daemon cleanly
+- Restore full keyboard control
+
+Use this if:
+- Keys get stuck
+- Modifiers won't release
+- The daemon is misbehaving
+- You need to quickly regain normal keyboard control
+
+After pressing equals, restart the daemon with:
+```bash
+systemctl --user restart keyboard-middleware
+```
+
+## Requirements
+
+- Linux with evdev support
+- User must be in the `input` group
+- systemd (for service management)
+- **Optional**: niri window manager (for automatic game mode detection)
 
 ## Troubleshooting
 
-**"Failed to grab keyboard device"**
-- Make sure you're running as root: `sudo ./keyboard-middleware`
-- Check that no other program is grabbing the keyboard
+### "Device or resource busy" errors
 
-**"No keyboard device found"**
-- List your input devices: `ls -la /dev/input/by-id/`
-- Modify the device detection logic in `find_keyboard_device()`
+Another process is already grabbing the keyboard devices. Check for:
+- Other keyboard-middleware instances: `pkill -f keyboard-middleware`
+- Other input remapping tools
 
-**Home row mods feel sluggish**
-- Adjust `TAPPING_TERM_MS` to a lower value (try 100-120ms)
-- Recompile after changes
+### Daemon not starting
 
-**SOCD not working**
-- Make sure game mode is active (rapid WASD alternation)
-- Check logs: `sudo journalctl -u keyboard-middleware -f`
+Check logs:
+```bash
+journalctl --user -u keyboard-middleware -f
+```
 
-## Similar Projects
+### IPC connection failures
 
-- [kmonad](https://github.com/kmonad/kmonad) - Haskell-based keyboard remapper
-- [kanata](https://github.com/jtroo/kanata) - Rust keyboard remapper inspired by QMK
-- [keyd](https://github.com/rvaiya/keyd) - Linux key remapping daemon
+Ensure daemon is running:
+```bash
+keyboard-middleware ping
+```
 
 ## License
 
 MIT
-
-## Contributing
-
-This is a personal project migrated from a QMK keymap. Feel free to fork and adapt to your needs!
-
-## Credits
-
-Based on the QMK keymap from `lemokey-x1-fibs` with features including:
-- Home row mods with permissive hold
-- SOCD cleaning with last-input priority
-- Automatic game mode detection
-- Raw HID communication (not yet implemented in userspace version)

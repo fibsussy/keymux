@@ -9,6 +9,7 @@ pub struct Config {
     pub device_name: Option<String>,
     pub enable_game_mode_auto: bool,
     pub enable_socd: bool,
+    pub password: Option<String>,
 }
 
 impl Default for Config {
@@ -18,6 +19,7 @@ impl Default for Config {
             device_name: None,
             enable_game_mode_auto: true,
             enable_socd: true,
+            password: None,
         }
     }
 }

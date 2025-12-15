@@ -2,8 +2,19 @@
 /target/
 Cargo.lock
 
+# Arch package build artifacts
+/pkg/
+*.pkg.tar.zst
+*.pkg.tar.xz
+
 # Configuration files
 config.toml
+password.txt
+
+# Test/debug files
+*.log
+temp.sh
+check_logs.sh
 
 # IDE files
 .vscode/

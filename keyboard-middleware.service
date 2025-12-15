@@ -1,22 +1,19 @@
 [Unit]
-Description=Keyboard Middleware - QMK-like features in userspace
-After=multi-user.target
-Wants=network.target
+Description=Keyboard Middleware Daemon
+Documentation=https://github.com/yourusername/keyboard-middleware
+After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/keyboard-middleware
-Restart=always
+ExecStart=/usr/bin/keyboard-middleware daemon
+Restart=on-failure
 RestartSec=5
-StandardOutput=journal
-StandardError=journal
+Environment="RUST_LOG=debug"
 
-# Security hardening
-NoNewPrivileges=false
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/dev/input /dev/uinput
+# Process management
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

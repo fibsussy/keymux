@@ -1,12 +1,15 @@
 use anyhow::{Context, Result};
-use evdev::{Device, EventType, InputEvent, Key};
-use std::collections::{HashMap, HashSet};
+use clap::{Parser, Subcommand};
+use dialoguer::Select;
+use evdev::{Device, Key};
+use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tracing::{debug, error, info};
 
 mod config;
 mod niri;
+mod process_event_new;
 mod socd;
 mod uinput;
 
@@ -14,6 +17,7 @@ mod uinput;
 mod tests;
 
 use niri::NiriEvent;
+use process_event_new::process_event;
 use socd::SocdCleaner;
 use uinput::VirtualKeyboard;
 
@@ -29,14 +33,86 @@ enum Layer {
     Fn,
 }
 
+/// What a specific key press is doing (recorded when pressed, replayed on release)
+#[derive(Debug, Clone)]
+enum Action {
+    /// This key press activated a modifier
+    Modifier(Key),
+    /// This key press emitted a regular key
+    RegularKey(Key),
+    /// This key is being handled by SOCD cleaner (don't release manually)
+    SocdManaged,
+    /// This key activated nav layer
+    NavLayerActivation,
+    /// Home row mod waiting for decision (tap or hold)
+    HomeRowModPending { hrm_key: Key, press_time: Instant },
+}
+
+/// What a physical key is currently doing
+#[derive(Debug, Clone)]
+struct KeyAction {
+    actions: Vec<Action>,
+}
+
+impl KeyAction {
+    fn new() -> Self {
+        Self {
+            actions: Vec::with_capacity(2), // Most keys do 1-2 things
+        }
+    }
+
+    fn add(&mut self, action: Action) {
+        self.actions.push(action);
+    }
+}
+
+/// Reference counting for modifiers (fast array-based lookup)
+#[derive(Debug, Clone)]
+struct ModifierState {
+    counts: [u8; 8], // Fixed size array for speed
+}
+
+impl ModifierState {
+    fn new() -> Self {
+        Self { counts: [0; 8] }
+    }
+
+    fn modifier_index(key: Key) -> Option<usize> {
+        match key {
+            Key::KEY_LEFTSHIFT => Some(0),
+            Key::KEY_RIGHTSHIFT => Some(1),
+            Key::KEY_LEFTCTRL => Some(2),
+            Key::KEY_RIGHTCTRL => Some(3),
+            Key::KEY_LEFTALT => Some(4),
+            Key::KEY_RIGHTALT => Some(5),
+            Key::KEY_LEFTMETA => Some(6),
+            Key::KEY_RIGHTMETA => Some(7),
+            _ => None,
+        }
+    }
+
+    fn increment(&mut self, key: Key) {
+        if let Some(idx) = Self::modifier_index(key) {
+            self.counts[idx] = self.counts[idx].saturating_add(1);
+        }
+    }
+
+    fn decrement(&mut self, key: Key) -> bool {
+        if let Some(idx) = Self::modifier_index(key) {
+            if self.counts[idx] > 0 {
+                self.counts[idx] -= 1;
+                return self.counts[idx] == 0; // Return true if we should release
+            }
+        }
+        true // If not tracked, release immediately
+    }
+}
+
 #[derive(Debug, Clone)]
 struct HomeRowMod {
     key: Key,
     modifier: Key,
     base_key: Key,
-    press_time: Instant,
-    is_mod: bool,
-    other_key_pressed: bool,
 }
 
 struct KeyboardState {
@@ -44,19 +120,31 @@ struct KeyboardState {
     home_row_mods: HashMap<Key, HomeRowMod>,
     socd_cleaner: SocdCleaner,
     game_mode: bool,
-    wasd_sequence: Vec<(Key, Instant)>,
-    pressed_keys: HashSet<Key>,
+
+    // Fast lookup for what each physical key is doing
+    held_keys: HashMap<Key, KeyAction>,
+    // Reference counting for modifiers
+    modifier_state: ModifierState,
+    // Nav layer tracking
+    nav_layer_active: bool,
+    // Password typer state (resets when leaving nav layer)
+    password_typed_in_nav: bool,
+    // Password from config
+    password: Option<String>,
 }
 
 impl KeyboardState {
-    fn new() -> Self {
+    fn new(password: Option<String>) -> Self {
         Self {
             layers: vec![Layer::Base, Layer::HomeRowMod],
             home_row_mods: Self::init_home_row_mods(),
             socd_cleaner: SocdCleaner::new(),
             game_mode: false,
-            wasd_sequence: Vec::new(),
-            pressed_keys: HashSet::new(),
+            held_keys: HashMap::new(),
+            modifier_state: ModifierState::new(),
+            nav_layer_active: false,
+            password_typed_in_nav: false,
+            password,
         }
     }
 
@@ -70,9 +158,6 @@ impl KeyboardState {
                 key: Key::KEY_A,
                 modifier: Key::KEY_LEFTMETA,
                 base_key: Key::KEY_A,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -81,9 +166,6 @@ impl KeyboardState {
                 key: Key::KEY_S,
                 modifier: Key::KEY_LEFTALT,
                 base_key: Key::KEY_S,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -92,9 +174,6 @@ impl KeyboardState {
                 key: Key::KEY_D,
                 modifier: Key::KEY_LEFTCTRL,
                 base_key: Key::KEY_D,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -103,9 +182,6 @@ impl KeyboardState {
                 key: Key::KEY_F,
                 modifier: Key::KEY_LEFTSHIFT,
                 base_key: Key::KEY_F,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
 
@@ -116,9 +192,6 @@ impl KeyboardState {
                 key: Key::KEY_J,
                 modifier: Key::KEY_RIGHTSHIFT,
                 base_key: Key::KEY_J,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -127,9 +200,6 @@ impl KeyboardState {
                 key: Key::KEY_K,
                 modifier: Key::KEY_RIGHTCTRL,
                 base_key: Key::KEY_K,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -138,9 +208,6 @@ impl KeyboardState {
                 key: Key::KEY_L,
                 modifier: Key::KEY_RIGHTALT,
                 base_key: Key::KEY_L,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
         mods.insert(
@@ -149,9 +216,6 @@ impl KeyboardState {
                 key: Key::KEY_SEMICOLON,
                 modifier: Key::KEY_RIGHTMETA,
                 base_key: Key::KEY_SEMICOLON,
-                press_time: Instant::now(),
-                is_mod: false,
-                other_key_pressed: false,
             },
         );
 
@@ -161,309 +225,8 @@ impl KeyboardState {
     const fn is_wasd_key(key: Key) -> bool {
         matches!(key, Key::KEY_W | Key::KEY_A | Key::KEY_S | Key::KEY_D)
     }
-
-    fn check_game_mode_entry(&mut self, key: Key, pressed: bool) {
-        if self.game_mode || !pressed || !Self::is_wasd_key(key) {
-            return;
-        }
-
-        let now = Instant::now();
-        self.wasd_sequence.push((key, now));
-
-        // Keep only recent presses (within 2 seconds)
-        self.wasd_sequence
-            .retain(|(_, time)| now.duration_since(*time) < Duration::from_secs(2));
-
-        // Check for rapid alternation (5+ different keys pressed)
-        let unique_keys: HashSet<_> = self.wasd_sequence.iter().map(|(k, _)| k).collect();
-
-        if unique_keys.len() >= 4 || self.wasd_sequence.len() >= 8 {
-            info!("Auto-entering game mode due to WASD activity");
-            self.enter_game_mode();
-        }
-    }
-
-    fn enter_game_mode(&mut self) {
-        info!("Entering game mode");
-        self.game_mode = true;
-        self.layers = vec![Layer::Base, Layer::Game];
-        self.wasd_sequence.clear();
-    }
-
-    fn exit_game_mode(&mut self) {
-        info!("Exiting game mode");
-        self.game_mode = false;
-        self.layers = vec![Layer::Base, Layer::HomeRowMod];
-        self.socd_cleaner.reset();
-    }
-
-    const fn should_exit_game_mode(key: Key, pressed: bool) -> bool {
-        if !pressed {
-            return false;
-        }
-
-        // Exit on GUI key press
-        matches!(
-            key,
-            Key::KEY_LEFTMETA | Key::KEY_RIGHTMETA | Key::KEY_LEFTALT | Key::KEY_RIGHTALT
-        )
-    }
 }
 
-#[allow(clippy::too_many_lines, clippy::unused_async)]
-async fn process_event(
-    event: InputEvent,
-    state: &mut KeyboardState,
-    vkbd: &mut VirtualKeyboard,
-) -> Result<()> {
-    if event.event_type() != EventType::KEY {
-        // Pass through non-key events
-        return Ok(());
-    }
-
-    let key = Key::new(event.code());
-    let pressed = event.value() == 1;
-    let released = event.value() == 0;
-    let repeat = event.value() == 2;
-
-    // Ignore repeat events (we handle our own repeats)
-    if repeat {
-        return Ok(());
-    }
-
-    debug!("Event: {:?} pressed={} released={}", key, pressed, released);
-
-    // Track left Alt for nav layer (layer key only, don't emit it)
-    if key == Key::KEY_LEFTALT {
-        if pressed {
-            state.pressed_keys.insert(key);
-        } else {
-            state.pressed_keys.remove(&key);
-        }
-        // Don't pass through left Alt - it's just a layer key
-        return Ok(());
-    }
-
-    // Check for game mode entry
-    state.check_game_mode_entry(key, pressed);
-
-    // Handle game mode
-    if state.game_mode {
-        if KeyboardState::should_exit_game_mode(key, pressed) {
-            state.exit_game_mode();
-        }
-
-        // SOCD cleaning for WASD in game mode
-        if KeyboardState::is_wasd_key(key) {
-            if pressed {
-                let output_keys = state.socd_cleaner.handle_press(key);
-                vkbd.update_socd_keys(output_keys)?;
-                return Ok(());
-            } else if released {
-                let output_keys = state.socd_cleaner.handle_release(key);
-                vkbd.update_socd_keys(output_keys)?;
-                return Ok(());
-            }
-        }
-    }
-
-    // Check for nav layer activation (left Alt held)
-    let nav_layer_active = state.pressed_keys.contains(&Key::KEY_LEFTALT);
-
-    // Handle nav layer (when left Alt is held)
-    if nav_layer_active {
-        if pressed {
-            match key {
-                // Home row becomes modifiers (not mod-tap, just modifiers)
-                Key::KEY_A => {
-                    vkbd.press_key(Key::KEY_LEFTMETA)?;
-                    return Ok(());
-                }
-                Key::KEY_S => {
-                    vkbd.press_key(Key::KEY_LEFTALT)?;
-                    return Ok(());
-                }
-                Key::KEY_D => {
-                    vkbd.press_key(Key::KEY_LEFTCTRL)?;
-                    return Ok(());
-                }
-                Key::KEY_F => {
-                    vkbd.press_key(Key::KEY_LEFTSHIFT)?;
-                    return Ok(());
-                }
-                // HJKL -> arrow keys
-                Key::KEY_H => {
-                    vkbd.press_key(Key::KEY_LEFT)?;
-                    return Ok(());
-                }
-                Key::KEY_J => {
-                    vkbd.press_key(Key::KEY_DOWN)?;
-                    return Ok(());
-                }
-                Key::KEY_K => {
-                    vkbd.press_key(Key::KEY_UP)?;
-                    return Ok(());
-                }
-                Key::KEY_L => {
-                    vkbd.press_key(Key::KEY_RIGHT)?;
-                    return Ok(());
-                }
-                // Mouse buttons and wheel (on right side cluster)
-                Key::KEY_UP => {
-                    vkbd.press_key(Key::BTN_MIDDLE)?; // MS_UP position = mouse button 3
-                    return Ok(());
-                }
-                Key::KEY_LEFT => {
-                    vkbd.press_key(Key::BTN_LEFT)?; // MS_LEFT position = left click
-                    return Ok(());
-                }
-                Key::KEY_DOWN => {
-                    vkbd.press_key(Key::BTN_MIDDLE)?; // MS_DOWN position = middle button
-                    return Ok(());
-                }
-                Key::KEY_RIGHT => {
-                    vkbd.press_key(Key::BTN_RIGHT)?; // MS_RIGHT position = right click
-                    return Ok(());
-                }
-                _ => {}
-            }
-        } else if released {
-            match key {
-                // Home row modifiers
-                Key::KEY_A => {
-                    vkbd.release_key(Key::KEY_LEFTMETA)?;
-                    return Ok(());
-                }
-                Key::KEY_S => {
-                    vkbd.release_key(Key::KEY_LEFTALT)?;
-                    return Ok(());
-                }
-                Key::KEY_D => {
-                    vkbd.release_key(Key::KEY_LEFTCTRL)?;
-                    return Ok(());
-                }
-                Key::KEY_F => {
-                    vkbd.release_key(Key::KEY_LEFTSHIFT)?;
-                    return Ok(());
-                }
-                // Arrow keys
-                Key::KEY_H => {
-                    vkbd.release_key(Key::KEY_LEFT)?;
-                    return Ok(());
-                }
-                Key::KEY_J => {
-                    vkbd.release_key(Key::KEY_DOWN)?;
-                    return Ok(());
-                }
-                Key::KEY_K => {
-                    vkbd.release_key(Key::KEY_UP)?;
-                    return Ok(());
-                }
-                Key::KEY_L => {
-                    vkbd.release_key(Key::KEY_RIGHT)?;
-                    return Ok(());
-                }
-                // Mouse buttons
-                Key::KEY_UP | Key::KEY_DOWN => {
-                    vkbd.release_key(Key::BTN_MIDDLE)?;
-                    return Ok(());
-                }
-                Key::KEY_LEFT => {
-                    vkbd.release_key(Key::BTN_LEFT)?;
-                    return Ok(());
-                }
-                Key::KEY_RIGHT => {
-                    vkbd.release_key(Key::BTN_RIGHT)?;
-                    return Ok(());
-                }
-                _ => {}
-            }
-        }
-    }
-
-    // Handle home row mods
-    let is_home_row_key = state.home_row_mods.contains_key(&key);
-
-    if is_home_row_key && pressed {
-        // First, activate any OTHER held home row mods as modifiers
-        for hrm in state.home_row_mods.values_mut() {
-            if state.pressed_keys.contains(&hrm.key) && !hrm.is_mod {
-                hrm.is_mod = true;
-                hrm.other_key_pressed = true;
-                vkbd.press_key(hrm.modifier)?;
-                info!("Home row mod activated by another home row key: {:?}", hrm.modifier);
-            }
-        }
-
-        // Now handle this home row key press
-        if let Some(hrm) = state.home_row_mods.get_mut(&key) {
-            debug!("Home row key pressed: {:?}, other keys: {}", key, state.pressed_keys.len());
-            hrm.press_time = Instant::now();
-            hrm.is_mod = false;
-            hrm.other_key_pressed = false;
-
-            // Don't auto-activate as mod - let it be decided on release or by another key press
-            state.pressed_keys.insert(key);
-            debug!("Waiting to determine tap or hold for {:?}", key);
-            return Ok(());
-        }
-    } else if is_home_row_key && released {
-        if let Some(hrm) = state.home_row_mods.get_mut(&key) {
-            let hold_duration = Instant::now().duration_since(hrm.press_time);
-            debug!("Home row key released: {:?}, hold_duration: {:?}ms, is_mod: {}",
-                   key, hold_duration.as_millis(), hrm.is_mod);
-
-            state.pressed_keys.remove(&key);
-
-            if hrm.is_mod {
-                vkbd.release_key(hrm.modifier)?;
-                info!("Home row mod released: {:?}", hrm.modifier);
-            } else if hold_duration < Duration::from_millis(TAPPING_TERM_MS) {
-                info!("Home row QUICK TAP: {:?} ({}ms)", hrm.base_key, hold_duration.as_millis());
-                vkbd.tap_key(hrm.base_key)?;
-            } else {
-                info!("Home row LONG HOLD TAP: {:?} ({}ms)", hrm.base_key, hold_duration.as_millis());
-                vkbd.tap_key(hrm.base_key)?;
-            }
-
-            return Ok(());
-        }
-    }
-
-    // Check if any home row mod should activate due to another key press
-    // PERMISSIVE HOLD: if a home row key is held and another key is pressed,
-    // activate the modifier regardless of timing
-    if pressed && !KeyboardState::is_wasd_key(key) && !is_home_row_key {
-        for hrm in state.home_row_mods.values_mut() {
-            if state.pressed_keys.contains(&hrm.key) && !hrm.is_mod {
-                hrm.is_mod = true;
-                hrm.other_key_pressed = true;
-                vkbd.press_key(hrm.modifier)?;
-                info!("Home row mod activated by other key press: {:?}", hrm.modifier);
-            }
-        }
-    }
-
-    // Swap Caps Lock and Escape
-    let final_key = match key {
-        Key::KEY_CAPSLOCK => Key::KEY_ESC,
-        Key::KEY_ESC => Key::KEY_CAPSLOCK,
-        _ => key,
-    };
-
-    // Track pressed keys for regular keys (non-home-row-mods)
-    if pressed {
-        state.pressed_keys.insert(key);
-        vkbd.press_key(final_key)?;
-    } else if released {
-        state.pressed_keys.remove(&key);
-        vkbd.release_key(final_key)?;
-    }
-
-    Ok(())
-}
-
-#[allow(clippy::unused_async)]
 async fn find_keyboard_device() -> Result<Device> {
     let devices = evdev::enumerate();
 
@@ -510,36 +273,112 @@ async fn find_keyboard_device() -> Result<Device> {
         );
     }
 
-    // If multiple keyboards, prefer physical keyboards over virtual ones
-    keyboards.sort_by_key(|(_, _, name)| {
-        let name_lower = name.to_lowercase();
-        // Deprioritize virtual keyboards from other tools
-        if name_lower.contains("virtual") || name_lower.contains("keyd") {
-            return 100;
-        }
-        // Prioritize: specific keyboard names > usb > any other
-        if name_lower.contains("lemokey") || name_lower.contains("keychron") {
-            0
-        } else if name_lower.contains("keyboard") {
-            1
-        } else if name_lower.contains("usb") {
-            2
-        } else {
-            3
-        }
-    });
+    // If only one keyboard, use it automatically
+    if keyboards.len() == 1 {
+        let (path, device, name) = keyboards.into_iter().next().unwrap();
+        info!("Using keyboard: {} ({})", name, path.display());
+        return Ok(device);
+    }
 
-    let (path, device, name) = keyboards.into_iter().next().unwrap();
+    // Multiple keyboards - let user choose
+    info!("Found {} keyboards", keyboards.len());
+    println!("\nFound multiple keyboards:");
+
+    let items: Vec<String> = keyboards
+        .iter()
+        .enumerate()
+        .map(|(i, (path, _, name))| format!("{}. {} ({})", i + 1, name, path.display()))
+        .collect();
+
+    let selection = Select::new()
+        .with_prompt("Select keyboard to use")
+        .items(&items)
+        .default(0)
+        .interact()
+        .context("Failed to get keyboard selection")?;
+
+    let (path, device, name) = keyboards.into_iter().nth(selection).unwrap();
     info!("Using keyboard: {} ({})", name, path.display());
 
     Ok(device)
 }
 
+#[derive(Parser)]
+#[command(name = "keyboard-middleware")]
+#[command(about = "Multi-keyboard middleware with home row mods and game mode")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the keyboard middleware daemon (default)
+    Daemon,
+    /// Set password for nav+backspace password typer
+    SetPassword,
+}
+
+fn get_config_path() -> std::path::PathBuf {
+    dirs::config_dir()
+        .map(|p| p.join("keyboard-middleware").join("config.toml"))
+        .unwrap_or_else(|| std::path::PathBuf::from("config.toml"))
+}
+
+fn handle_set_password() -> Result<()> {
+    use dialoguer::Password;
+
+    println!("Setting password for nav+backspace password typer\n");
+
+    let password = Password::new()
+        .with_prompt("Enter password")
+        .with_confirmation("Confirm password", "Passwords don't match")
+        .interact()?;
+
+    // Load existing config or create default
+    let config_path = get_config_path();
+    let mut config = config::Config::load_or_default(&config_path);
+
+    // Update password
+    config.password = Some(password);
+
+    // Ensure directory exists
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Save config
+    config.save(&config_path)?;
+
+    println!("\n✓ Password saved to {}", config_path.display());
+    println!("Use nav+backspace to type your password");
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::SetPassword) => {
+            return handle_set_password();
+        }
+        Some(Commands::Daemon) | None => {
+            // Continue to daemon mode below
+        }
+    }
+
     tracing_subscriber::fmt::init();
 
     info!("Starting keyboard middleware");
+
+    // Load config
+    let config_path = get_config_path();
+    let config = config::Config::load_or_default(&config_path);
+    if config.password.is_some() {
+        info!("Password configured for nav+backspace");
+    }
 
     // Find keyboard device
     let mut device = find_keyboard_device().await?;
@@ -554,7 +393,7 @@ async fn main() -> Result<()> {
     let mut vkbd = VirtualKeyboard::new().context("Failed to create virtual keyboard")?;
 
     // Initialize state
-    let mut state = KeyboardState::new();
+    let mut state = KeyboardState::new(config.password);
 
     // Start niri monitor for gamescope detection
     let (niri_tx, niri_rx): (_, Receiver<NiriEvent>) = mpsc::channel();
@@ -571,10 +410,13 @@ async fn main() -> Result<()> {
                 let should_enable = niri::should_enable_gamemode(app_id.as_deref());
                 if should_enable && !state.game_mode {
                     info!("🎮 Entering game mode (gamescope detected)");
-                    state.enter_game_mode();
+                    state.game_mode = true;
+                    state.layers = vec![Layer::Base, Layer::Game];
                 } else if !should_enable && state.game_mode {
                     info!("💻 Exiting game mode (left gamescope)");
-                    state.exit_game_mode();
+                    state.game_mode = false;
+                    state.layers = vec![Layer::Base, Layer::HomeRowMod];
+                    state.socd_cleaner.reset();
                 }
             }
             Err(TryRecvError::Empty) => {
