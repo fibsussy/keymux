@@ -107,6 +107,14 @@ main() {
     log_success "Binary built successfully"
     echo
 
+    # Stop existing service before installing binary (prevents "Text file busy" error)
+    if systemctl --user is-active keyboard-middleware &>/dev/null; then
+        log_info "Stopping existing service before installation..."
+        systemctl --user stop keyboard-middleware
+        log_success "Service stopped"
+        echo
+    fi
+
     # Install binary
     log_info "Installing binary to /usr/bin/keyboard-middleware..."
     if ! sudo cp target/release/keyboard-middleware /usr/bin/keyboard-middleware; then
@@ -147,13 +155,7 @@ main() {
     log_success "Service enabled"
     echo
 
-    # Stop existing service if running (done last to preserve keyboard layout)
-    if systemctl --user is-active keyboard-middleware &>/dev/null; then
-        log_info "Stopping existing service for restart..."
-        systemctl --user stop keyboard-middleware
-    fi
-
-    # Start/restart service
+    # Start service
     log_info "Starting keyboard-middleware service..."
     if ! systemctl --user start keyboard-middleware; then
         log_error "Failed to start service!"
