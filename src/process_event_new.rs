@@ -64,9 +64,25 @@ pub fn process_event(
             state.caps_lock_on = !state.caps_lock_on;
         }
 
+        // Detect both shifts held (no other keys) to toggle game mode override
+        if unlikely(matches!(key, Key::KEY_LEFTSHIFT | Key::KEY_RIGHTSHIFT)) {
+            // Record this shift key first
+            let final_key = apply_key_remapping(key, &state.key_remapping);
+            vkbd.press_key(final_key)?;
+            key_action.add(Action::RegularKey(final_key));
+            state.insert_held_key(key, key_action);
+
+            // Check if only both shifts are now held
+            if state.only_both_shifts_held() {
+                state.toggle_game_mode_override();
+                info!("Game mode override toggled for window: {:?}", state.current_window_app_id);
+            }
+            return Ok(());
+        }
+
         // Track Left Alt for nav layer (disabled in game mode, passes through as regular key)
         if unlikely(key == Key::KEY_LEFTALT)
-            && likely(!state.game_mode) {
+            && likely(!state.effective_game_mode()) {
                 state.nav_layer_active = true;
                 key_action.add(Action::NavLayerActivation);
                 state.insert_held_key(key, key_action);
@@ -76,7 +92,7 @@ pub fn process_event(
 
         // === GAME MODE HANDLING ===
         // Game mode is controlled ONLY by niri monitor
-        if unlikely(state.game_mode) {
+        if unlikely(state.effective_game_mode()) {
             // SOCD cleaning for WASD (ULTRA HOT PATH for gamers)
             if likely(KeyboardState::is_wasd_key(key)) {
                 let output_keys = state.socd_cleaner.handle_press(key);
@@ -177,7 +193,7 @@ pub fn process_event(
         // === HOME ROW MODS ===
         // In game mode: disable left hand (ASDF), keep right hand (JKL;)
         let is_left_hand_hrm = matches!(key, Key::KEY_A | Key::KEY_S | Key::KEY_D | Key::KEY_F);
-        let skip_hrm = state.game_mode && is_left_hand_hrm;
+        let skip_hrm = state.effective_game_mode() && is_left_hand_hrm;
 
         if likely(!skip_hrm) {
             if likely(KeyboardState::is_home_row_mod(key)) {
@@ -203,7 +219,7 @@ pub fn process_event(
                     if state.is_hrm_pending(hrm_key) {
                         // In game mode, skip left hand home row mods
                         let is_left_hand = matches!(hrm_key, Key::KEY_A | Key::KEY_S | Key::KEY_D | Key::KEY_F);
-                        if state.game_mode && is_left_hand {
+                        if state.effective_game_mode() && is_left_hand {
                             continue;
                         }
 
@@ -239,7 +255,7 @@ pub fn process_event(
                     if state.is_hrm_pending(hrm_key) {
                         // In game mode, skip left hand home row mods
                         let is_left_hand = matches!(hrm_key, Key::KEY_A | Key::KEY_S | Key::KEY_D | Key::KEY_F);
-                        if state.game_mode && is_left_hand {
+                        if state.effective_game_mode() && is_left_hand {
                             continue;
                         }
 

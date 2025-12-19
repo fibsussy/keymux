@@ -1,6 +1,7 @@
 #![allow(clippy::inline_always)]
 
 use evdev::Key;
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::config::KeyRemapping;
@@ -183,6 +184,9 @@ pub struct KeyboardState {
     pub nav_layer_active: bool,
     pub password_typed_in_nav: bool,
     pub caps_lock_on: bool,
+    // Game mode override tracking
+    pub current_window_app_id: Option<String>,
+    pub game_mode_overrides: HashSet<String>,
     // Cold fields (rarely accessed) - Box to save stack space
     pub password: Option<Box<str>>,
 }
@@ -210,6 +214,9 @@ impl KeyboardState {
             nav_layer_active: false,
             password_typed_in_nav: false,
             caps_lock_on: false,
+            // Game mode override tracking
+            current_window_app_id: None,
+            game_mode_overrides: HashSet::new(),
             // Box password to save stack space (cold data, rarely accessed)
             password: password.map(|s| s.into_boxed_str()),
         }
@@ -377,5 +384,48 @@ impl KeyboardState {
     #[inline(always)]
     pub const fn is_wasd_key(key: Key) -> bool {
         matches!(key, Key::KEY_W | Key::KEY_A | Key::KEY_S | Key::KEY_D)
+    }
+
+    // Game mode override helpers
+    pub fn effective_game_mode(&self) -> bool {
+        let base_mode = self.game_mode;
+        // Check if current window has an override
+        if let Some(ref app_id) = self.current_window_app_id {
+            if self.game_mode_overrides.contains(app_id) {
+                // Override inverts the mode
+                return !base_mode;
+            }
+        }
+        base_mode
+    }
+
+    pub fn toggle_game_mode_override(&mut self) {
+        if let Some(ref app_id) = self.current_window_app_id {
+            if self.game_mode_overrides.contains(app_id) {
+                self.game_mode_overrides.remove(app_id);
+            } else {
+                self.game_mode_overrides.insert(app_id.clone());
+            }
+        }
+    }
+
+    // Check if only both shift keys are held (no other keys)
+    pub fn only_both_shifts_held(&self) -> bool {
+        let mut left_shift_held = false;
+        let mut right_shift_held = false;
+        let mut other_keys_held = 0;
+
+        for (i, key_action) in self.held_keys.iter().enumerate() {
+            if key_action.is_occupied() {
+                let key = Key::new(i as u16);
+                match key {
+                    Key::KEY_LEFTSHIFT => left_shift_held = true,
+                    Key::KEY_RIGHTSHIFT => right_shift_held = true,
+                    _ => other_keys_held += 1,
+                }
+            }
+        }
+
+        left_shift_held && right_shift_held && other_keys_held == 0
     }
 }

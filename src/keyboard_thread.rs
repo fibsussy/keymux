@@ -115,6 +115,9 @@ impl KeyboardThread {
             // Check for niri events
             match niri_rx.try_recv() {
                 Ok(NiriEvent::WindowFocusChanged(window_info)) => {
+                    // Update current window app_id for game mode override tracking
+                    state.current_window_app_id = window_info.app_id.clone();
+
                     let should_enable = crate::niri::should_enable_gamemode(&window_info);
                     if should_enable && !state.game_mode {
                         info!("🎮 [{}] Entering game mode (game detected)", name);
