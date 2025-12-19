@@ -304,6 +304,9 @@ impl Daemon {
         // Get key remapping for this keyboard
         let key_remapping = self.get_key_remapping(id);
 
+        // Get double-tap window, defaulting to tapping_term_ms if not set
+        let double_tap_window_ms = self.config.double_tap_window_ms.unwrap_or(self.config.tapping_term_ms);
+
         let thread = KeyboardThread::spawn(
             id.clone(),
             device,
@@ -311,6 +314,7 @@ impl Daemon {
             niri_rx,
             self.config.password.clone(),
             key_remapping,
+            double_tap_window_ms,
         );
 
         self.threads.insert(id.clone(), thread);

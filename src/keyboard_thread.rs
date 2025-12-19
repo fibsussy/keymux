@@ -36,6 +36,7 @@ impl KeyboardThread {
         niri_rx: Receiver<NiriEvent>,
         password: Option<String>,
         key_remapping: KeyRemapping,
+        double_tap_window_ms: u64,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::channel();
         let running = Arc::new(AtomicBool::new(true));
@@ -54,6 +55,7 @@ impl KeyboardThread {
                 running_clone,
                 password,
                 key_remapping,
+                double_tap_window_ms,
             ) {
                 error!("Keyboard thread {} error: {}", name_clone, e);
             }
@@ -81,6 +83,7 @@ impl KeyboardThread {
         running: Arc<AtomicBool>,
         password: Option<String>,
         key_remapping: KeyRemapping,
+        double_tap_window_ms: u64,
     ) -> Result<()> {
         // Grab the device
         device
@@ -94,7 +97,7 @@ impl KeyboardThread {
             .context("Failed to create virtual keyboard")?;
 
         // Initialize state
-        let mut state = KeyboardState::new(password, key_remapping);
+        let mut state = KeyboardState::new(password, key_remapping, double_tap_window_ms);
 
         // Main event loop
         loop {

@@ -1,6 +1,7 @@
 #![allow(clippy::inline_always)]
 
 use evdev::Key;
+use std::time::Instant;
 
 use crate::config::KeyRemapping;
 use crate::socd::SocdCleaner;
@@ -19,6 +20,8 @@ pub enum Action {
     NavLayerActivation,
     /// Home row mod waiting for decision (tap or hold)
     HomeRowModPending { hrm_key: Key },
+    /// Home row mod holding the base key (double-tap-and-hold)
+    HomeRowModHoldingBase { base_key: Key },
 }
 
 /// What a physical key is currently doing
@@ -165,6 +168,11 @@ pub struct KeyboardState {
     held_keys: Box<[KeyAction; 256]>,
     // Pending home row mods as bit flags (8 keys = 1 byte!)
     pending_hrm_keys: u8,
+    // Last tap times for home row mods (8 keys for double-tap detection)
+    // None means never tapped, Some(Instant) is the last tap time
+    hrm_last_tap_times: [Option<Instant>; 8],
+    // Double-tap window in milliseconds
+    double_tap_window_ms: u64,
     // Reference counting for modifiers
     pub modifier_state: ModifierState,
     pub socd_cleaner: SocdCleaner,
@@ -180,7 +188,7 @@ pub struct KeyboardState {
 }
 
 impl KeyboardState {
-    pub fn new(password: Option<String>, key_remapping: KeyRemapping) -> Self {
+    pub fn new(password: Option<String>, key_remapping: KeyRemapping, double_tap_window_ms: u64) -> Self {
         // Create array with vec and convert to boxed array
         let mut held_keys_vec = Vec::with_capacity(256);
         for _ in 0..256 {
@@ -192,6 +200,9 @@ impl KeyboardState {
             held_keys,
             // Bit flags: 0 = no pending keys
             pending_hrm_keys: 0,
+            // Initialize all tap times to None
+            hrm_last_tap_times: [None; 8],
+            double_tap_window_ms,
             modifier_state: ModifierState::new(),
             socd_cleaner: SocdCleaner::new(),
             key_remapping,
@@ -285,6 +296,25 @@ impl KeyboardState {
     #[inline(always)]
     pub const fn has_pending_hrm(&self) -> bool {
         self.pending_hrm_keys != 0
+    }
+
+    // Double-tap detection for home row mods
+    #[inline(always)]
+    pub fn set_hrm_last_tap(&mut self, key: Key) {
+        if let Some(bit) = Self::hrm_key_to_bit(key) {
+            self.hrm_last_tap_times[bit as usize] = Some(Instant::now());
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_double_tap(&self, key: Key) -> bool {
+        if let Some(bit) = Self::hrm_key_to_bit(key) {
+            if let Some(last_tap) = self.hrm_last_tap_times[bit as usize] {
+                let elapsed = last_tap.elapsed().as_millis();
+                return elapsed <= self.double_tap_window_ms as u128;
+            }
+        }
+        false
     }
 
     // Home row mod configuration

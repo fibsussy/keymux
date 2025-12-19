@@ -7,6 +7,8 @@ use std::path::Path;
 #[allow(dead_code)]
 pub struct Config {
     pub tapping_term_ms: u64,
+    /// Double-tap window for homerow mods in milliseconds (default: uses tapping_term_ms)
+    pub double_tap_window_ms: Option<u64>,
     pub enable_game_mode_auto: bool,
     pub enable_socd: bool,
     pub password: Option<String>,
@@ -44,6 +46,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             tapping_term_ms: 130,
+            double_tap_window_ms: None, // None means use tapping_term_ms
             enable_game_mode_auto: true,
             enable_socd: true,
             password: None,

@@ -181,6 +181,17 @@ pub fn process_event(
 
         if likely(!skip_hrm) {
             if likely(KeyboardState::is_home_row_mod(key)) {
+                // Check for double-tap: if this key was tapped recently, hold the base key
+                if state.is_double_tap(key) {
+                    if let Some(hrm) = KeyboardState::get_home_row_mod(key) {
+                        // Double-tap detected: press and hold the base key
+                        vkbd.press_key(hrm.base_key)?;
+                        key_action.add(Action::HomeRowModHoldingBase { base_key: hrm.base_key });
+                        state.insert_held_key(key, key_action);
+                        return Ok(());
+                    }
+                }
+
                 // Check if ANY other home row mod is held and pending (bit flag check)
                 // Iterate through all 8 home row mod keys
                 const HRM_KEYS: [Key; 8] = [
@@ -288,7 +299,13 @@ pub fn process_event(
                             // Note: tapping term check could be added here if needed
                             // For now we always tap regardless of hold duration
                             vkbd.tap_key(hrm.base_key)?;
+                            // Record tap time for double-tap detection
+                            state.set_hrm_last_tap(*hrm_key);
                         }
+                    }
+                    Action::HomeRowModHoldingBase { base_key } => {
+                        // Release the base key that was being held (double-tap-and-hold)
+                        vkbd.release_key(*base_key)?;
                     }
                 }
             }
