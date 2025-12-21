@@ -7,11 +7,7 @@ use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
-use crate::config::{Config, KeyRemapping};
-use crate::ipc::{IpcRequest, IpcResponse, IpcServer, KeyboardInfo};
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
-use crate::keyboard_thread::KeyboardThread;
-use crate::niri;
 
 /// Hotplug event from udev monitor
 #[derive(Debug)]
@@ -22,14 +18,8 @@ enum HotplugEvent {
 
 /// Main daemon orchestrator
 pub struct Daemon {
-    config: Config,
-    config_path: std::path::PathBuf,
-    /// Currently running keyboard threads
-    threads: HashMap<KeyboardId, KeyboardThread>,
     /// All detected keyboards (connected + disconnected)
     all_keyboards: HashMap<KeyboardId, KeyboardMeta>,
-    /// IPC server
-    ipc_server: IpcServer,
     /// Hotplug event receiver
     hotplug_rx: Receiver<HotplugEvent>,
 }
@@ -112,19 +102,14 @@ fn start_udev_monitor(tx: Sender<HotplugEvent>) {
 }
 
 impl Daemon {
-    pub fn new(config: Config, config_path: std::path::PathBuf) -> Result<Self> {
-        let ipc_server = IpcServer::new()?;
+    pub fn new() -> Result<Self> {
         let (hotplug_tx, hotplug_rx) = mpsc::channel();
 
         // Start udev monitor in background
         start_udev_monitor(hotplug_tx);
 
         Ok(Self {
-            config,
-            config_path,
-            threads: HashMap::new(),
             all_keyboards: HashMap::new(),
-            ipc_server,
             hotplug_rx,
         })
     }
@@ -133,68 +118,33 @@ impl Daemon {
     pub fn run(&mut self) -> Result<()> {
         info!("Starting keyboard middleware daemon");
 
-        // Discover and start keyboard threads
+        // Discover keyboards
         self.discover_keyboards();
 
-        // Initialize config if needed and save it
-        self.init_enabled_set();
-        if let Err(e) = self.config.save(&self.config_path) {
-            warn!("Failed to save initial config: {}", e);
-        } else {
-            info!("Config initialized and saved to {:?}", self.config_path);
-        }
-
-        self.start_enabled_keyboards()?;
-
-        info!("Daemon ready, {} keyboard(s) active out of {} discovered",
-              self.threads.len(),
-              self.all_keyboards.len());
+        info!("Daemon ready, {} keyboard(s) discovered", self.all_keyboards.len());
 
         // Main daemon loop - event-driven, no polling!
         loop {
-            // Handle IPC requests
-            if let Some((request, stream)) = self.ipc_server.try_accept()? {
-                let is_shutdown = matches!(request, IpcRequest::Shutdown);
-                let response = self.handle_ipc_request(request);
-                if let Err(e) = IpcServer::send_response(stream, &response) {
-                    error!("Failed to send IPC response: {}", e);
-                }
-
-                // Check if we got shutdown request
-                if is_shutdown && matches!(response, IpcResponse::Ok) {
-                    info!("Received shutdown request, stopping daemon");
-                    break;
-                }
-            }
-
             // Check for hotplug events from udev (non-blocking)
             match self.hotplug_rx.try_recv() {
                 Ok(HotplugEvent::Added | HotplugEvent::Removed) => {
                     // Keyboard added or removed - rediscover
                     debug!("Hotplug event detected, rediscovering keyboards");
-                    if let Err(e) = self.handle_hotplug() {
-                        error!("Hotplug handling failed: {}", e);
-                    }
+                    self.discover_keyboards();
+                    info!("Hotplug: Updated keyboard list, {} total", self.all_keyboards.len());
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // No hotplug event, continue
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    warn!("Hotplug monitor died, continuing without hotplug support");
+                    warn!("Hotplug monitor died, exiting");
+                    break;
                 }
             }
 
-            // Note: Niri events are handled by individual keyboard threads, not here
-
-            // Clean up dead threads
-            self.cleanup_dead_threads();
-
             // Sleep briefly to avoid busy-waiting
-            thread::sleep(Duration::from_millis(10));
+            thread::sleep(Duration::from_millis(100));
         }
-
-        // Shutdown all threads
-        self.shutdown_all_threads();
 
         info!("Daemon stopped");
         Ok(())
@@ -232,273 +182,5 @@ impl Daemon {
                 info!("Discovered keyboard: {} ({})", name, id);
             }
         }
-    }
-
-    /// Start threads for all enabled keyboards
-    #[allow(clippy::unnecessary_wraps)]
-    fn start_enabled_keyboards(&mut self) -> Result<()> {
-        let keyboards = find_all_keyboards();
-
-        info!("Starting enabled keyboards (found {} total)", keyboards.len());
-
-        for (id, (device, name)) in keyboards {
-            info!("Checking keyboard: {} ({}), enabled: {}", name, id, self.is_keyboard_enabled(&id));
-            if self.is_keyboard_enabled(&id) {
-                self.start_keyboard_thread(&id, device, &name);
-            } else {
-                info!("Skipping disabled keyboard: {} ({})", name, id);
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Check if a keyboard is enabled in config
-    /// DEFAULT: All keyboards are DISABLED unless explicitly in the enabled set
-    fn is_keyboard_enabled(&self, id: &KeyboardId) -> bool {
-        self.config.enabled_keyboards.as_ref().map_or_else(|| {
-            // No config = all disabled by default
-            debug!("enabled_keyboards is None, {} is DISABLED (default)", id);
-            false
-        }, |set| {
-            let contains = set.contains(id.as_str());
-            debug!("Checking if {} is in enabled set: {} (set has {} items)", id, contains, set.len());
-            contains
-        })
-    }
-
-    /// Get key remapping configuration for a keyboard
-    /// Returns custom config if set, otherwise default
-    fn get_key_remapping(&self, id: &KeyboardId) -> KeyRemapping {
-        self.config
-            .key_remapping
-            .as_ref()
-            .and_then(|map| map.get(id.as_str()))
-            .cloned()
-            .unwrap_or_default()
-    }
-
-    /// Initialize `enabled_keyboards` set if needed (creates empty set by default)
-    fn init_enabled_set(&mut self) {
-        if self.config.enabled_keyboards.is_none() {
-            // Create an EMPTY set - all keyboards disabled by default
-            info!("Initializing enabled_keyboards with empty set (all disabled by default)");
-            self.config.enabled_keyboards = Some(std::collections::HashSet::new());
-        }
-    }
-
-    /// Start a keyboard thread
-    fn start_keyboard_thread(
-        &mut self,
-        id: &KeyboardId,
-        device: evdev::Device,
-        name: &str,
-    ) {
-        info!("Starting keyboard thread for: {} (ID: {})", name, id);
-
-        // Each keyboard thread gets its own niri monitor
-        // This is simpler than broadcasting and works well
-        let (niri_tx, niri_rx) = mpsc::channel();
-        niri::start_niri_monitor(niri_tx);
-
-        // Get key remapping for this keyboard
-        let key_remapping = self.get_key_remapping(id);
-
-        // Get double-tap window, defaulting to tapping_term_ms if not set
-        let double_tap_window_ms = self.config.double_tap_window_ms.unwrap_or(self.config.tapping_term_ms);
-
-        let thread = KeyboardThread::spawn(
-            id.clone(),
-            device,
-            name.to_string(),
-            niri_rx,
-            self.config.password.clone(),
-            key_remapping,
-            double_tap_window_ms,
-        );
-
-        self.threads.insert(id.clone(), thread);
-        info!("Thread started and inserted into HashMap for: {} (ID: {}), total threads: {}", name, id, self.threads.len());
-    }
-
-    /// Handle hotplug events (keyboard connect/disconnect)
-    #[allow(clippy::unnecessary_wraps)]
-    fn handle_hotplug(&mut self) -> Result<()> {
-        // Re-discover keyboards
-        self.discover_keyboards();
-
-        // Start threads for newly connected, enabled keyboards
-        let keyboards = find_all_keyboards();
-        for (id, (device, name)) in keyboards {
-            if self.is_keyboard_enabled(&id) && !self.threads.contains_key(&id) {
-                info!("Hotplug: Starting thread for newly connected keyboard: {} ({})", name, id);
-                self.start_keyboard_thread(&id, device, &name);
-            }
-        }
-
-        // Stop threads for disconnected keyboards
-        let disconnected: Vec<KeyboardId> = self
-            .all_keyboards
-            .iter()
-            .filter(|(id, meta)| !meta.connected && self.threads.contains_key(id))
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for id in disconnected {
-            if let Some(thread) = self.threads.remove(&id) {
-                info!("Hotplug: Stopping thread for disconnected keyboard: {} ({})", thread.name, id);
-                thread.shutdown();
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Cleanup threads that have stopped
-    fn cleanup_dead_threads(&mut self) {
-        let dead: Vec<KeyboardId> = self
-            .threads
-            .iter()
-            .filter(|(_, thread)| !thread.is_running())
-            .map(|(id, _)| id.clone())
-            .collect();
-
-        for id in dead {
-            if let Some(thread) = self.threads.remove(&id) {
-                warn!("Removing dead thread: {} ({})", thread.name, id);
-            }
-        }
-    }
-
-    /// Shutdown all running threads
-    fn shutdown_all_threads(&mut self) {
-        for (_, thread) in self.threads.drain() {
-            info!("Shutting down thread: {} ({})", thread.name, thread.keyboard_id);
-            thread.shutdown();
-        }
-    }
-
-    /// Handle an IPC request
-    fn handle_ipc_request(&mut self, request: IpcRequest) -> IpcResponse {
-        debug!("Handling IPC request: {:?}", request);
-
-        match request {
-            IpcRequest::Ping => IpcResponse::Pong,
-
-            IpcRequest::ListKeyboards => {
-                let mut infos = Vec::new();
-
-                for (id, meta) in &self.all_keyboards {
-                    let enabled = self.is_keyboard_enabled(id);
-                    infos.push(KeyboardInfo {
-                        hardware_id: id.to_string(),
-                        name: meta.name.clone(),
-                        device_path: meta.device_path.clone().unwrap_or_else(|| "unknown".to_string()),
-                        enabled,
-                        connected: meta.connected,
-                    });
-                }
-
-                IpcResponse::KeyboardList(infos)
-            }
-
-            IpcRequest::EnableKeyboard(hardware_id) => {
-                self.enable_keyboard(&hardware_id)
-            }
-
-            IpcRequest::DisableKeyboard(hardware_id) => {
-                self.disable_keyboard(&hardware_id)
-            }
-
-            IpcRequest::ToggleKeyboards => {
-                // Return current list for client to handle interactively
-                let mut infos = Vec::new();
-                for (id, meta) in &self.all_keyboards {
-                    let enabled = self.is_keyboard_enabled(id);
-                    infos.push(KeyboardInfo {
-                        hardware_id: id.to_string(),
-                        name: meta.name.clone(),
-                        device_path: meta.device_path.clone().unwrap_or_else(|| "unknown".to_string()),
-                        enabled,
-                        connected: meta.connected,
-                    });
-                }
-                IpcResponse::KeyboardList(infos)
-            }
-
-            IpcRequest::Shutdown => {
-                info!("Shutdown requested via IPC");
-                IpcResponse::Ok
-            }
-        }
-    }
-
-    /// Enable a keyboard by hardware ID
-    fn enable_keyboard(&mut self, hardware_id: &str) -> IpcResponse {
-        let id = KeyboardId::from_string(hardware_id.to_string());
-        info!("Enable keyboard requested: {}", hardware_id);
-
-        // Ensure enabled set is initialized
-        self.init_enabled_set();
-
-        // Update config
-        if let Some(enabled_set) = &mut self.config.enabled_keyboards {
-            let was_inserted = enabled_set.insert(hardware_id.to_string());
-            info!("Config updated, inserted: {}, set now has {} items", was_inserted, enabled_set.len());
-        }
-
-        // Save config
-        if let Err(e) = self.config.save(&self.config_path) {
-            error!("Failed to save config: {}", e);
-            return IpcResponse::Error(format!("Failed to save config: {e}"));
-        }
-        info!("Config saved to {:?}", self.config_path);
-
-        // Start thread if keyboard is connected and not already running
-        if self.threads.contains_key(&id) {
-            info!("Keyboard {} already running", hardware_id);
-        } else {
-            let mut keyboards = find_all_keyboards();
-            if let Some((device, name)) = keyboards.remove(&id) {
-                self.start_keyboard_thread(&id, device, &name);
-                info!("Enabled and started keyboard: {}", hardware_id);
-            } else {
-                info!("Enabled keyboard {} (not currently connected)", hardware_id);
-            }
-        }
-
-        IpcResponse::Ok
-    }
-
-    /// Disable a keyboard by hardware ID
-    fn disable_keyboard(&mut self, hardware_id: &str) -> IpcResponse {
-        let id = KeyboardId::from_string(hardware_id.to_string());
-        info!("Disable keyboard requested: {}", hardware_id);
-
-        // Ensure enabled set is initialized
-        self.init_enabled_set();
-
-        // Update config
-        if let Some(enabled_set) = &mut self.config.enabled_keyboards {
-            let was_removed = enabled_set.remove(hardware_id);
-            info!("Config updated, removed: {}, set now has {} items", was_removed, enabled_set.len());
-        }
-
-        // Save config
-        if let Err(e) = self.config.save(&self.config_path) {
-            error!("Failed to save config: {}", e);
-            return IpcResponse::Error(format!("Failed to save config: {e}"));
-        }
-        info!("Config saved to {:?}", self.config_path);
-
-        // Stop thread if running
-        if let Some(thread) = self.threads.remove(&id) {
-            thread.shutdown();
-            info!("Disabled and stopped keyboard: {}", hardware_id);
-        } else {
-            info!("Keyboard {} was not running", hardware_id);
-        }
-
-        IpcResponse::Ok
     }
 }
