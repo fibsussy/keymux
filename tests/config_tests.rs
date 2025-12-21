@@ -1,4 +1,5 @@
 use keyboard_middleware::config::{Config, KeyCode, Action, Layer};
+use std::collections::HashMap;
 use std::fs;
 
 #[test]
@@ -50,10 +51,12 @@ fn test_validate_all_config_fields() {
     assert_eq!(config.remaps.get(&KeyCode::KC_A), Some(&Action::HR(KeyCode::KC_A, KeyCode::KC_LGUI)));
     assert_eq!(config.remaps.get(&KeyCode::KC_S), Some(&Action::HR(KeyCode::KC_S, KeyCode::KC_LALT)));
 
-    // Validate nav layer
-    assert!(!config.nav_layer.remaps.is_empty());
-    assert_eq!(config.nav_layer.remaps.get(&KeyCode::KC_H), Some(&Action::Key(KeyCode::KC_LEFT)));
-    assert_eq!(config.nav_layer.remaps.get(&KeyCode::KC_J), Some(&Action::Key(KeyCode::KC_DOWN)));
+    // Validate layers
+    assert!(!config.layers.is_empty());
+    let nav_layer = config.layers.get(&Layer::L_NAV).expect("L_NAV layer should exist");
+    assert!(!nav_layer.remaps.is_empty());
+    assert_eq!(nav_layer.remaps.get(&KeyCode::KC_H), Some(&Action::Key(KeyCode::KC_LEFT)));
+    assert_eq!(nav_layer.remaps.get(&KeyCode::KC_J), Some(&Action::Key(KeyCode::KC_DOWN)));
 
     // Validate game mode
     assert!(config.game_mode.auto_detect);
@@ -96,7 +99,7 @@ fn test_save_config_roundtrip() {
     assert_eq!(config.enabled_keyboards, config2.enabled_keyboards);
     assert_eq!(config.password, config2.password);
     assert_eq!(config.remaps, config2.remaps);
-    assert_eq!(config.nav_layer, config2.nav_layer);
+    assert_eq!(config.layers, config2.layers);
     assert_eq!(config.game_mode, config2.game_mode);
     assert_eq!(config.keyboard_overrides, config2.keyboard_overrides);
 }
@@ -136,7 +139,7 @@ fn test_save_and_load_from_disk() {
     assert_eq!(original_config.tapping_term_ms, loaded_config.tapping_term_ms);
     assert_eq!(original_config.enabled_keyboards, loaded_config.enabled_keyboards);
     assert_eq!(original_config.remaps, loaded_config.remaps);
-    assert_eq!(original_config.nav_layer, loaded_config.nav_layer);
+    assert_eq!(original_config.layers, loaded_config.layers);
     assert_eq!(original_config.game_mode, loaded_config.game_mode);
 
     // Clean up

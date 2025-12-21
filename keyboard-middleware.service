@@ -5,7 +5,7 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/keyboard-middleware --daemon
+ExecStart=/usr/bin/keyboard-middleware daemon
 Restart=on-failure
 RestartSec=5
 Environment="RUST_LOG=debug"

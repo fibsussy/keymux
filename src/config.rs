@@ -29,11 +29,15 @@ pub enum KeyCode {
     KC_F7, KC_F8, KC_F9, KC_F10, KC_F11, KC_F12,
 }
 
-/// Layer identifier
+/// Layer identifier - supports unlimited layers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum Layer {
+    L_BASE,
     L_NAV,
+    L_NUM,
+    L_SYM,
+    L_FN,
 }
 
 /// Key action - what happens when a key is pressed
@@ -47,6 +51,8 @@ pub enum Action {
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - for gaming
     Socd(KeyCode, KeyCode),
+    /// Type password (double-tap to add Enter)
+    Password,
 }
 
 /// Game mode detection methods
@@ -112,7 +118,7 @@ pub struct Config {
     pub password: Option<String>,
     pub enabled_keyboards: Option<Vec<String>>,
     pub remaps: HashMap<KeyCode, Action>,
-    pub nav_layer: LayerConfig,
+    pub layers: HashMap<Layer, LayerConfig>,
     pub game_mode: GameMode,
     pub keyboard_overrides: HashMap<String, String>, // TODO: define proper type
 }

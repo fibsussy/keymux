@@ -1,11 +1,17 @@
 use anyhow::{Context, Result};
-use evdev::{Device, InputEvent, Key, AttributeSet};
+use evdev::{Device, InputEvent, Key, AttributeSet, EventType};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use std::sync::mpsc::Receiver;
 use std::thread;
 use tracing::{error, info, warn};
 
+// SYN event constants
+const SYN_REPORT: i32 = 0;
+const SYN_CODE: u16 = 0;
+
+use crate::config::Config;
 use crate::keyboard_id::KeyboardId;
+use crate::keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, ProcessResult};
 
 /// Process events from a physical keyboard and output to virtual device
 /// Returns immediately after spawning thread
@@ -14,10 +20,11 @@ pub fn start_event_processor(
     keyboard_id: KeyboardId,
     mut device: Device,
     keyboard_name: String,
+    config: Config,
     shutdown_rx: Receiver<()>,
 ) -> Result<()> {
     thread::spawn(move || {
-        if let Err(e) = run_event_processor(&keyboard_id, &mut device, &keyboard_name, shutdown_rx) {
+        if let Err(e) = run_event_processor(&keyboard_id, &mut device, &keyboard_name, &config, shutdown_rx) {
             error!("Event processor for {} failed: {}", keyboard_id, e);
         }
         info!("Event processor thread exiting for: {}", keyboard_id);
@@ -30,6 +37,7 @@ fn run_event_processor(
     keyboard_id: &KeyboardId,
     device: &mut Device,
     keyboard_name: &str,
+    config: &Config,
     shutdown_rx: Receiver<()>,
 ) -> Result<()> {
     info!("Starting event processor for: {} ({})", keyboard_name, keyboard_id);
@@ -41,6 +49,9 @@ fn run_event_processor(
     // Create virtual uinput device
     let mut virtual_device = create_virtual_device(device, keyboard_name)?;
     info!("Created virtual device for: {}", keyboard_name);
+
+    // Create keymap processor (QMK-inspired)
+    let mut keymap = KeymapProcessor::new(config);
 
     // Event processing loop
     loop {
@@ -64,22 +75,80 @@ fn run_event_processor(
 
         // Read events from physical keyboard
         for ev in device.fetch_events()? {
-            let mut output_event = ev;
-
-            // Remap keys: CAPS -> ESC
+            // Process key events through keymap
             if let evdev::EventType::KEY = ev.event_type() {
-                if ev.code() == Key::KEY_CAPSLOCK.code() {
-                    // Remap CAPS to ESC
-                    output_event = InputEvent::new_now(
-                        ev.event_type(),
-                        Key::KEY_ESC.code(),
-                        ev.value(),
-                    );
-                }
-            }
+                // Convert evdev key code to our KeyCode enum
+                if let Some(input_key) = evdev_to_keycode(Key::new(ev.code())) {
+                    let pressed = ev.value() == 1; // 1 = press, 0 = release, 2 = repeat
+                    let repeat = ev.value() == 2;
 
-            // Write to virtual device
-            virtual_device.emit(&[output_event])?;
+                    // Ignore repeat events
+                    if repeat {
+                        continue;
+                    }
+
+                    // Process key through keymap (QMK-inspired)
+                    let result = keymap.process_key(input_key, pressed);
+
+                    match result {
+                        ProcessResult::EmitKey(output_key, output_pressed) => {
+                            // Convert back to evdev and emit
+                            let output_evdev = keycode_to_evdev(output_key);
+                            let output_event = InputEvent::new_now(
+                                ev.event_type(),
+                                output_evdev.code(),
+                                if output_pressed { 1 } else { 0 },
+                            );
+                            virtual_device.emit(&[output_event])?;
+                        }
+                        ProcessResult::TypeString(text, add_enter) => {
+                            // Type out the string character by character
+                            type_string(&mut virtual_device, &text, add_enter)?;
+                        }
+                        ProcessResult::TapKeyPressRelease(tap_key) => {
+                            // Emit tap key press and release
+                            let key_evdev = keycode_to_evdev(tap_key);
+                            let press_event = InputEvent::new_now(
+                                ev.event_type(),
+                                key_evdev.code(),
+                                1,
+                            );
+                            virtual_device.emit(&[press_event])?;
+
+                            std::thread::sleep(std::time::Duration::from_millis(5));
+
+                            let release_event = InputEvent::new_now(
+                                ev.event_type(),
+                                key_evdev.code(),
+                                0,
+                            );
+                            virtual_device.emit(&[release_event])?;
+                        }
+                        ProcessResult::MultipleEvents(events) => {
+                            // Emit multiple events in sequence
+                            for (key, pressed) in events {
+                                let key_evdev = keycode_to_evdev(key);
+                                let event = InputEvent::new_now(
+                                    ev.event_type(),
+                                    key_evdev.code(),
+                                    if pressed { 1 } else { 0 },
+                                );
+                                virtual_device.emit(&[event])?;
+                                std::thread::sleep(std::time::Duration::from_millis(2));
+                            }
+                        }
+                        ProcessResult::None => {
+                            // Don't emit anything (consumed by layer switch, etc.)
+                        }
+                    }
+                } else {
+                    // Unsupported key, pass through unchanged
+                    virtual_device.emit(&[ev])?;
+                }
+            } else {
+                // Non-key event (SYN, etc.), pass through
+                virtual_device.emit(&[ev])?;
+            }
         }
     }
 }
@@ -105,4 +174,148 @@ fn create_virtual_device(
         .build()?;
 
     Ok(virtual_device)
+}
+
+/// Type a string by emitting key events for each character
+/// Batches all events with SYN events into a single emit for INSTANT typing
+fn type_string(virtual_device: &mut VirtualDevice, text: &str, _add_enter: bool) -> Result<()> {
+    let mut events = Vec::with_capacity(text.len() * 8); // Pre-allocate for speed
+
+    for ch in text.chars() {
+        let (key, needs_shift) = char_to_key(ch);
+
+        if let Some(key) = key {
+            // Press shift if needed
+            if needs_shift {
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+
+            // Press key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 1));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release key
+            events.push(InputEvent::new(EventType::KEY, key.code(), 0));
+            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+
+            // Release shift if needed
+            if needs_shift {
+                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
+                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            }
+        }
+    }
+
+    // Emit ALL events at once - INSTANT like paste!
+    virtual_device.emit(&events)?;
+
+    Ok(())
+}
+
+/// Convert a character to an evdev Key and whether shift is needed
+fn char_to_key(ch: char) -> (Option<Key>, bool) {
+    match ch {
+        'a' => (Some(Key::KEY_A), false),
+        'b' => (Some(Key::KEY_B), false),
+        'c' => (Some(Key::KEY_C), false),
+        'd' => (Some(Key::KEY_D), false),
+        'e' => (Some(Key::KEY_E), false),
+        'f' => (Some(Key::KEY_F), false),
+        'g' => (Some(Key::KEY_G), false),
+        'h' => (Some(Key::KEY_H), false),
+        'i' => (Some(Key::KEY_I), false),
+        'j' => (Some(Key::KEY_J), false),
+        'k' => (Some(Key::KEY_K), false),
+        'l' => (Some(Key::KEY_L), false),
+        'm' => (Some(Key::KEY_M), false),
+        'n' => (Some(Key::KEY_N), false),
+        'o' => (Some(Key::KEY_O), false),
+        'p' => (Some(Key::KEY_P), false),
+        'q' => (Some(Key::KEY_Q), false),
+        'r' => (Some(Key::KEY_R), false),
+        's' => (Some(Key::KEY_S), false),
+        't' => (Some(Key::KEY_T), false),
+        'u' => (Some(Key::KEY_U), false),
+        'v' => (Some(Key::KEY_V), false),
+        'w' => (Some(Key::KEY_W), false),
+        'x' => (Some(Key::KEY_X), false),
+        'y' => (Some(Key::KEY_Y), false),
+        'z' => (Some(Key::KEY_Z), false),
+
+        'A' => (Some(Key::KEY_A), true),
+        'B' => (Some(Key::KEY_B), true),
+        'C' => (Some(Key::KEY_C), true),
+        'D' => (Some(Key::KEY_D), true),
+        'E' => (Some(Key::KEY_E), true),
+        'F' => (Some(Key::KEY_F), true),
+        'G' => (Some(Key::KEY_G), true),
+        'H' => (Some(Key::KEY_H), true),
+        'I' => (Some(Key::KEY_I), true),
+        'J' => (Some(Key::KEY_J), true),
+        'K' => (Some(Key::KEY_K), true),
+        'L' => (Some(Key::KEY_L), true),
+        'M' => (Some(Key::KEY_M), true),
+        'N' => (Some(Key::KEY_N), true),
+        'O' => (Some(Key::KEY_O), true),
+        'P' => (Some(Key::KEY_P), true),
+        'Q' => (Some(Key::KEY_Q), true),
+        'R' => (Some(Key::KEY_R), true),
+        'S' => (Some(Key::KEY_S), true),
+        'T' => (Some(Key::KEY_T), true),
+        'U' => (Some(Key::KEY_U), true),
+        'V' => (Some(Key::KEY_V), true),
+        'W' => (Some(Key::KEY_W), true),
+        'X' => (Some(Key::KEY_X), true),
+        'Y' => (Some(Key::KEY_Y), true),
+        'Z' => (Some(Key::KEY_Z), true),
+
+        '0' => (Some(Key::KEY_0), false),
+        '1' => (Some(Key::KEY_1), false),
+        '2' => (Some(Key::KEY_2), false),
+        '3' => (Some(Key::KEY_3), false),
+        '4' => (Some(Key::KEY_4), false),
+        '5' => (Some(Key::KEY_5), false),
+        '6' => (Some(Key::KEY_6), false),
+        '7' => (Some(Key::KEY_7), false),
+        '8' => (Some(Key::KEY_8), false),
+        '9' => (Some(Key::KEY_9), false),
+
+        '!' => (Some(Key::KEY_1), true),
+        '@' => (Some(Key::KEY_2), true),
+        '#' => (Some(Key::KEY_3), true),
+        '$' => (Some(Key::KEY_4), true),
+        '%' => (Some(Key::KEY_5), true),
+        '^' => (Some(Key::KEY_6), true),
+        '&' => (Some(Key::KEY_7), true),
+        '*' => (Some(Key::KEY_8), true),
+        '(' => (Some(Key::KEY_9), true),
+        ')' => (Some(Key::KEY_0), true),
+
+        ' ' => (Some(Key::KEY_SPACE), false),
+        '-' => (Some(Key::KEY_MINUS), false),
+        '_' => (Some(Key::KEY_MINUS), true),
+        '=' => (Some(Key::KEY_EQUAL), false),
+        '+' => (Some(Key::KEY_EQUAL), true),
+        '[' => (Some(Key::KEY_LEFTBRACE), false),
+        '{' => (Some(Key::KEY_LEFTBRACE), true),
+        ']' => (Some(Key::KEY_RIGHTBRACE), false),
+        '}' => (Some(Key::KEY_RIGHTBRACE), true),
+        '\\' => (Some(Key::KEY_BACKSLASH), false),
+        '|' => (Some(Key::KEY_BACKSLASH), true),
+        ';' => (Some(Key::KEY_SEMICOLON), false),
+        ':' => (Some(Key::KEY_SEMICOLON), true),
+        '\'' => (Some(Key::KEY_APOSTROPHE), false),
+        '"' => (Some(Key::KEY_APOSTROPHE), true),
+        ',' => (Some(Key::KEY_COMMA), false),
+        '<' => (Some(Key::KEY_COMMA), true),
+        '.' => (Some(Key::KEY_DOT), false),
+        '>' => (Some(Key::KEY_DOT), true),
+        '/' => (Some(Key::KEY_SLASH), false),
+        '?' => (Some(Key::KEY_SLASH), true),
+        '`' => (Some(Key::KEY_GRAVE), false),
+        '~' => (Some(Key::KEY_GRAVE), true),
+
+        _ => (None, false),
+    }
 }

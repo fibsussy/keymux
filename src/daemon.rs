@@ -1,8 +1,10 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::UnixListener;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
@@ -10,6 +12,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::event_processor;
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
+use crate::ipc::{get_socket_path, IpcRequest, IpcResponse};
 
 /// Hotplug event from udev monitor
 #[derive(Debug)]
@@ -18,12 +21,20 @@ enum HotplugEvent {
     Removed,
 }
 
+/// IPC command from client
+#[derive(Debug)]
+enum IpcCommand {
+    Reload,
+}
+
 /// Main daemon orchestrator
 pub struct Daemon {
     /// All detected keyboards (connected + disconnected)
     all_keyboards: HashMap<KeyboardId, KeyboardMeta>,
     /// Hotplug event receiver
     hotplug_rx: Receiver<HotplugEvent>,
+    /// IPC command receiver
+    ipc_rx: Receiver<IpcCommand>,
     /// Configuration
     config: Config,
     /// Active event processor threads - maps KeyboardId to shutdown channel Sender
@@ -107,12 +118,83 @@ fn start_udev_monitor(tx: Sender<HotplugEvent>) {
     });
 }
 
+/// Start IPC listener for client commands
+fn start_ipc_listener(tx: Sender<IpcCommand>) {
+    thread::spawn(move || {
+        let socket_path = get_socket_path();
+
+        // Remove old socket if it exists
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = match UnixListener::bind(&socket_path) {
+            Ok(l) => {
+                info!("IPC socket listening at {:?}", socket_path);
+                l
+            }
+            Err(e) => {
+                error!("Failed to bind IPC socket: {}", e);
+                return;
+            }
+        };
+
+        for stream in listener.incoming() {
+            match stream {
+                Ok(mut stream) => {
+                    // Read request
+                    let mut len_buf = [0u8; 4];
+                    if stream.read_exact(&mut len_buf).is_err() {
+                        continue;
+                    }
+                    let len = u32::from_le_bytes(len_buf) as usize;
+
+                    let mut buf = vec![0u8; len];
+                    if stream.read_exact(&mut buf).is_err() {
+                        continue;
+                    }
+
+                    let request: IpcRequest = match bincode::deserialize(&buf) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+
+                    debug!("IPC request: {:?}", request);
+
+                    // Handle request
+                    let response = match request {
+                        IpcRequest::ToggleKeyboards => {
+                            // Send reload command to daemon
+                            let _ = tx.send(IpcCommand::Reload);
+                            IpcResponse::Ok
+                        }
+                        _ => IpcResponse::Error("Not implemented".to_string()),
+                    };
+
+                    // Send response
+                    if let Ok(encoded) = bincode::serialize(&response) {
+                        let len = (encoded.len() as u32).to_le_bytes();
+                        use std::io::Write;
+                        let _ = stream.write_all(&len);
+                        let _ = stream.write_all(&encoded);
+                    }
+                }
+                Err(e) => {
+                    error!("IPC connection error: {}", e);
+                }
+            }
+        }
+    });
+}
+
 impl Daemon {
     pub fn new() -> Result<Self> {
         let (hotplug_tx, hotplug_rx) = mpsc::channel();
+        let (ipc_tx, ipc_rx) = mpsc::channel();
 
         // Start udev monitor in background
         start_udev_monitor(hotplug_tx);
+
+        // Start IPC listener
+        start_ipc_listener(ipc_tx);
 
         // Load config
         let config_path = Config::default_path()?;
@@ -124,6 +206,7 @@ impl Daemon {
         Ok(Self {
             all_keyboards: HashMap::new(),
             hotplug_rx,
+            ipc_rx,
             config,
             active_processors: HashMap::new(),
         })
@@ -154,6 +237,32 @@ impl Daemon {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     warn!("Hotplug monitor died, exiting");
                     break;
+                }
+            }
+
+            // Check for IPC commands (non-blocking)
+            match self.ipc_rx.try_recv() {
+                Ok(IpcCommand::Reload) => {
+                    // Reload config and rediscover keyboards
+                    info!("IPC: Reload requested");
+                    let config_path = Config::default_path().unwrap();
+                    match Config::load(&config_path) {
+                        Ok(new_config) => {
+                            self.config = new_config;
+                            info!("IPC: Config reloaded");
+                            self.discover_keyboards();
+                            info!("IPC: Hot-reload complete!");
+                        }
+                        Err(e) => {
+                            error!("IPC: Failed to reload config: {}", e);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // No IPC command
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    warn!("IPC listener died");
                 }
             }
 
@@ -220,6 +329,7 @@ impl Daemon {
                     id.clone(),
                     device,
                     name,
+                    self.config.clone(),
                     shutdown_rx,
                 ) {
                     error!("Failed to start event processor for {}: {}", id, e);
@@ -229,15 +339,26 @@ impl Daemon {
             }
         }
 
-        // Kill threads for keyboards that are no longer connected
-        let disconnected_ids: Vec<KeyboardId> = self.active_processors
+        // Kill threads for keyboards that are either:
+        // 1. No longer connected (unplugged)
+        // 2. Still connected but disabled in config
+        let should_stop: Vec<KeyboardId> = self.active_processors
             .keys()
-            .filter(|id| !connected_ids.contains(id))
+            .filter(|id| {
+                let id_str = id.to_string();
+                // Stop if disconnected OR not in enabled list
+                !connected_ids.contains(id) || !enabled_ids.contains(&id_str)
+            })
             .cloned()
             .collect();
 
-        for id in disconnected_ids {
-            info!("Keyboard {} disconnected, stopping event processor", id);
+        for id in should_stop {
+            if !connected_ids.contains(&id) {
+                info!("Keyboard {} disconnected, stopping event processor", id);
+            } else {
+                info!("Keyboard {} disabled, stopping event processor", id);
+            }
+
             if let Some(shutdown_tx) = self.active_processors.remove(&id) {
                 // Send shutdown signal (ignore if thread already died)
                 let _ = shutdown_tx.send(());
