@@ -9,6 +9,7 @@ mod keyboard_id;
 pub mod config;
 pub mod niri;
 mod toggle;
+mod list;
 mod event_processor;
 mod keymap;
 mod ipc;
@@ -28,6 +29,9 @@ struct Cli {
 enum Commands {
     /// Run the keyboard middleware daemon
     Daemon,
+
+    /// List all detected keyboards
+    List,
 
     /// Toggle keyboard enable/disable state
     Toggle,
@@ -58,6 +62,9 @@ fn main() -> Result<()> {
             let mut daemon = Daemon::new()?;
             daemon.run()?;
         }
+        Some(Commands::List) => {
+            list::run_list()?;
+        }
         Some(Commands::Toggle) => {
             toggle::run_toggle()?;
         }
@@ -85,6 +92,7 @@ fn print_help() {
     println!();
     println!("{}", "COMMANDS:".bright_yellow().bold());
     println!("  {}  {}", "daemon".bright_green().bold(), "Run the keyboard middleware daemon".dimmed());
+    println!("  {}    {}", "list".bright_green().bold(), "List all detected keyboards".dimmed());
     println!("  {}  {}", "toggle".bright_green().bold(), "Toggle keyboard enable/disable state".dimmed());
     println!("  {}  {}", "set-password".bright_green().bold(), "Set or update the password for typing".dimmed());
     println!("  {}    {}", "help".bright_green().bold(), "Print this message".dimmed());
@@ -95,6 +103,7 @@ fn print_help() {
     println!();
     println!("{}", "EXAMPLES:".bright_yellow().bold());
     println!("  {}  {}", "keyboard-middleware daemon".bright_white(), "Start the daemon".dimmed());
+    println!("  {}    {}", "keyboard-middleware list".bright_white(), "Show all detected keyboards".dimmed());
     println!("  {}  {}", "keyboard-middleware toggle".bright_white(), "Select keyboards to enable/disable".dimmed());
     println!();
 }

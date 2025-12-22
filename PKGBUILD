@@ -35,6 +35,15 @@ package() {
     # Install example config
     install -Dm644 "$srcdir/config.example.ron" "$pkgdir/usr/share/doc/$pkgname/config.example.ron"
 
+    # Generate and install shell completions
+    install -dm755 "$pkgdir/usr/share/bash-completion/completions"
+    install -dm755 "$pkgdir/usr/share/zsh/site-functions"
+    install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"
+
+    "$srcdir/$pkgname" completion bash > "$pkgdir/usr/share/bash-completion/completions/$pkgname"
+    "$srcdir/$pkgname" completion zsh > "$pkgdir/usr/share/zsh/site-functions/_$pkgname"
+    "$srcdir/$pkgname" completion fish > "$pkgdir/usr/share/fish/vendor_completions.d/$pkgname.fish"
+
     # Create config directory structure in package
     install -dm755 "$pkgdir/etc/skel/.config/$pkgname"
 }

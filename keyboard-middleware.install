@@ -2,24 +2,47 @@ post_install() {
     echo ""
     echo "==> Keyboard Middleware installed successfully!"
     echo ""
+
+    # Copy config files for the installing user
+    if [ -n "$SUDO_USER" ]; then
+        USER_HOME=$(eval echo ~$SUDO_USER)
+        CONFIG_DIR="$USER_HOME/.config/keyboard-middleware"
+
+        echo "==> Setting up config files for $SUDO_USER..."
+        sudo -u "$SUDO_USER" mkdir -p "$CONFIG_DIR"
+
+        # Always copy example config
+        sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.example.ron"
+        echo "    ✓ Copied config.example.ron to $CONFIG_DIR/"
+
+        # Only copy to config.ron if it doesn't exist
+        if [ ! -f "$CONFIG_DIR/config.ron" ]; then
+            sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.ron"
+            echo "    ✓ Created config.ron (edit this file for your keymaps)"
+        else
+            echo "    ℹ config.ron already exists, skipping (your config preserved)"
+        fi
+        echo ""
+    else
+        echo "==> Run these commands to set up your config:"
+        echo "    mkdir -p ~/.config/keyboard-middleware"
+        echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.example.ron"
+        echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron"
+        echo ""
+    fi
+
     echo "==> Getting Started:"
-    echo "    1. Copy the example config:"
-    echo "       mkdir -p ~/.config/keyboard-middleware"
-    echo "       cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron"
-    echo ""
-    echo "    2. Edit the config to customize your keymaps:"
+    echo "    1. Edit the config to customize your keymaps:"
     echo "       \$EDITOR ~/.config/keyboard-middleware/config.ron"
     echo ""
-    echo "    3. Enable and start the service:"
+    echo "    2. Enable and start the service:"
     echo "       systemctl --user enable --now keyboard-middleware"
     echo ""
-    echo "    4. Select which keyboards to enable:"
+    echo "    3. Select which keyboards to enable:"
     echo "       keyboard-middleware toggle"
     echo ""
-    echo "==> Optional: Set up shell completions:"
-    echo "    bash:  keyboard-middleware completion bash > ~/.local/share/bash-completion/completions/keyboard-middleware"
-    echo "    zsh:   keyboard-middleware completion zsh > ~/.local/share/zsh/site-functions/_keyboard-middleware"
-    echo "    fish:  keyboard-middleware completion fish > ~/.config/fish/completions/keyboard-middleware.fish"
+    echo "==> Shell completions have been installed system-wide!"
+    echo "    (bash/zsh/fish will auto-load them on next shell start)"
     echo ""
     echo "==> For more info: https://github.com/fibsussy/keyboard-middleware"
     echo ""
