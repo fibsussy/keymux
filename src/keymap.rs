@@ -210,11 +210,9 @@ impl KeymapProcessor {
                     ProcessResult::TapKeyPressRelease(KeyCode::KC_ENT)
                 } else {
                     // First tap: type password
-                    if let Some(ref password) = self.password {
+                    self.password.as_ref().map_or(ProcessResult::None, |password| {
                         ProcessResult::TypeString(password.clone(), false)
-                    } else {
-                        ProcessResult::None
-                    }
+                    })
                 }
             }
             None => {
@@ -277,10 +275,8 @@ impl KeymapProcessor {
                                 return ProcessResult::TapKeyPressRelease(tap_key);
                             }
                             // Held: just release hold
-                            events.push((hold_key, false));
-                        } else {
-                            events.push((hold_key, false));
                         }
+                        events.push((hold_key, false));
                     }
                     KeyAction::OverloadHolding { hold_key } => {
                         events.push((hold_key, false));
@@ -491,22 +487,18 @@ impl KeymapProcessor {
         let mut events = Vec::new();
 
         // Release keys that are no longer active
-        for old_key_opt in &old_keys {
-            if let Some(old_key) = old_key_opt {
-                // Check if this key is still in new_keys
-                if !new_keys.contains(&Some(*old_key)) {
-                    events.push((*old_key, false));
-                }
+        for old_key in old_keys.iter().flatten() {
+            // Check if this key is still in new_keys
+            if !new_keys.contains(&Some(*old_key)) {
+                events.push((*old_key, false));
             }
         }
 
         // Press keys that are newly active
-        for new_key_opt in &new_keys {
-            if let Some(new_key) = new_key_opt {
-                // Check if this key was already active
-                if !old_keys.contains(&Some(*new_key)) {
-                    events.push((*new_key, true));
-                }
+        for new_key in new_keys.iter().flatten() {
+            // Check if this key was already active
+            if !old_keys.contains(&Some(*new_key)) {
+                events.push((*new_key, true));
             }
         }
 
