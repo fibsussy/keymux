@@ -8,6 +8,7 @@ url="https://github.com/fibsussy/keyboard-middleware"
 license=('MIT')
 depends=('systemd')
 makedepends=()
+options=('!debug')
 install=$pkgname.install
 
 # Download precompiled binary from GitHub releases

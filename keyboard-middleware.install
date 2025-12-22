@@ -68,6 +68,12 @@ post_upgrade() {
         if [ -d "$CONFIG_DIR" ]; then
             sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.example.ron"
             echo "==> Updated config.example.ron (your config.ron was NOT touched)"
+
+            # Create .gitignore if it doesn't exist
+            if [ ! -f "$CONFIG_DIR/.gitignore" ]; then
+                echo "password.txt" | sudo -u "$SUDO_USER" tee "$CONFIG_DIR/.gitignore" > /dev/null
+                echo "==> Created .gitignore (protects password.txt from git)"
+            fi
         fi
     fi
 
