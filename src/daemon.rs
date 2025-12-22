@@ -1,7 +1,9 @@
 use anyhow::Result;
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
 use std::os::unix::net::UnixListener;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, channel, Receiver, Sender};
 use std::thread;
@@ -37,6 +39,8 @@ pub struct Daemon {
     ipc_rx: Receiver<IpcCommand>,
     /// Niri event receiver
     niri_rx: Receiver<NiriEvent>,
+    /// File watcher event receiver
+    file_watcher_rx: Receiver<Event>,
     /// Configuration
     config: Config,
     /// Active event processor threads - maps KeyboardId to shutdown channel Sender
@@ -52,6 +56,37 @@ struct KeyboardMeta {
     name: String,
     device_path: Option<String>,
     connected: bool,
+}
+
+/// Start file watcher for config file
+fn start_config_watcher(config_path: &Path, tx: Sender<Event>) -> notify::Result<()> {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<Event>| {
+        if let Ok(event) = res {
+            // Only care about Modify events
+            if matches!(event.kind, EventKind::Modify(_)) {
+                let _ = tx.send(event);
+            }
+        }
+    })?;
+
+    // Watch config directory (some editors use atomic rename)
+    let config_dir = config_path
+        .parent()
+        .ok_or_else(|| notify::Error::generic("Invalid config path"))?;
+
+    watcher.watch(config_dir, RecursiveMode::NonRecursive)?;
+
+    info!("Watching config file for changes: {:?}", config_path);
+
+    // Keep watcher alive in a thread
+    thread::spawn(move || {
+        let _watcher = watcher; // Move watcher into thread to keep it alive
+        loop {
+            thread::sleep(Duration::from_secs(3600));
+        }
+    });
+
+    Ok(())
 }
 
 /// Start udev monitor for keyboard hotplug events
@@ -196,6 +231,7 @@ impl Daemon {
         let (hotplug_tx, hotplug_rx) = mpsc::channel();
         let (ipc_tx, ipc_rx) = mpsc::channel();
         let (niri_tx, niri_rx) = mpsc::channel();
+        let (file_watcher_tx, file_watcher_rx) = mpsc::channel();
 
         // Start udev monitor in background
         start_udev_monitor(hotplug_tx);
@@ -207,10 +243,21 @@ impl Daemon {
         let config_path = Config::default_path()?;
         let config = Config::load(&config_path)?;
 
+        // Start file watcher
+        if let Err(e) = start_config_watcher(&config_path, file_watcher_tx) {
+            error!("Failed to start config file watcher: {}", e);
+            warn!("Hot-reload will not work automatically");
+        }
+
         // Start niri monitor if auto_detect is enabled
-        if config.game_mode.auto_detect {
-            info!("Starting niri window monitor for automatic game mode detection");
-            niri::start_niri_monitor(niri_tx);
+        if crate::config::GameMode::auto_detect_enabled() {
+            if niri::is_niri_available() {
+                info!("Starting niri window monitor for automatic game mode detection");
+                niri::start_niri_monitor(niri_tx);
+            } else {
+                warn!("Automatic game mode detection enabled but Niri socket not found");
+                warn!("Game mode detection will be unavailable");
+            }
         } else {
             info!("Automatic game mode detection is disabled");
         }
@@ -223,6 +270,7 @@ impl Daemon {
             hotplug_rx,
             ipc_rx,
             niri_rx,
+            file_watcher_rx,
             config,
             active_processors: HashMap::new(),
             game_mode_senders: HashMap::new(),
@@ -261,20 +309,8 @@ impl Daemon {
             // Check for IPC commands (non-blocking)
             match self.ipc_rx.try_recv() {
                 Ok(IpcCommand::Reload) => {
-                    // Reload config and rediscover keyboards
                     info!("IPC: Reload requested");
-                    let config_path = Config::default_path().unwrap();
-                    match Config::load(&config_path) {
-                        Ok(new_config) => {
-                            self.config = new_config;
-                            info!("IPC: Config reloaded");
-                            self.discover_keyboards();
-                            info!("IPC: Hot-reload complete!");
-                        }
-                        Err(e) => {
-                            error!("IPC: Failed to reload config: {}", e);
-                        }
-                    }
+                    self.perform_hot_reload();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // No IPC command
@@ -285,6 +321,27 @@ impl Daemon {
             }
 
             // Check for niri window events (non-blocking)
+            // Check for config file changes (non-blocking)
+            match self.file_watcher_rx.try_recv() {
+                Ok(_event) => {
+                    info!("Config file changed, triggering hot-reload...");
+                    // Add debouncing to avoid multiple rapid reloads
+                    thread::sleep(Duration::from_millis(100));
+
+                    // Drain any additional events
+                    while self.file_watcher_rx.try_recv().is_ok() {}
+
+                    // Perform reload
+                    self.perform_hot_reload();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // No file changes
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    warn!("File watcher died");
+                }
+            }
+
             match self.niri_rx.try_recv() {
                 Ok(NiriEvent::WindowFocusChanged(window_info)) => {
                     // Determine if game mode should be active
@@ -320,6 +377,73 @@ impl Daemon {
                 debug!("Failed to send game mode state to {}: {}", id, e);
             }
         }
+    }
+
+    /// Perform hot-reload: kill threads, reload config, respawn threads
+    fn perform_hot_reload(&mut self) {
+        info!("Starting hot-reload...");
+
+        // 1. Stop all active processors to release devices
+        info!("Stopping {} active processors for hot-reload...", self.active_processors.len());
+
+        // Send shutdown signal to all processors and wait for them to exit
+        for (id, shutdown_tx) in self.active_processors.drain() {
+            let _ = shutdown_tx.send(());
+            debug!("Sent shutdown signal to {}", id);
+        }
+        self.game_mode_senders.clear();
+
+        // Give threads time to actually exit and release device file descriptors
+        // This is critical - the old thread must close the device before we can reopen it
+        thread::sleep(Duration::from_millis(500));
+
+        // 2. Reload config from disk
+        let config_path = match Config::default_path() {
+            Ok(path) => path,
+            Err(e) => {
+                error!("Failed to get config path: {}", e);
+                return;
+            }
+        };
+
+        match Config::load(&config_path) {
+            Ok(new_config) => {
+                self.config = new_config;
+                info!("Config reloaded successfully");
+
+                // Notify user of successful reload
+                let _ = std::process::Command::new("notify-send")
+                    .arg("-a")
+                    .arg("Keyboard Middleware")
+                    .arg("Config Reloaded")
+                    .arg("Configuration reloaded successfully")
+                    .spawn();
+            }
+            Err(e) => {
+                error!("Failed to reload config: {}", e);
+                error!("Keeping previous config");
+
+                // Notify user of config error
+                let error_msg = format!("Invalid config: {}", e);
+                let _ = std::process::Command::new("notify-send")
+                    .arg("-u")
+                    .arg("critical")
+                    .arg("-a")
+                    .arg("Keyboard Middleware")
+                    .arg("Config Error")
+                    .arg(&error_msg)
+                    .spawn();
+
+                return;
+            }
+        }
+
+        // 3. Run discover_keyboards which will restart enabled keyboards
+        // Since we removed all processors above, discover_keyboards will see
+        // all keyboards as needing to be started
+        self.discover_keyboards();
+
+        info!("Hot-reload complete! {} processors active", self.active_processors.len());
     }
 
     /// Discover all connected keyboards
@@ -375,11 +499,14 @@ impl Daemon {
                 // Create game mode channel
                 let (game_mode_tx, game_mode_rx) = channel();
 
+                // Get keyboard-specific config
+                let keyboard_config = self.config.for_keyboard(&id_str);
+
                 if let Err(e) = event_processor::start_event_processor(
                     id.clone(),
                     device,
                     name,
-                    self.config.clone(),
+                    keyboard_config,
                     shutdown_rx,
                     game_mode_rx,
                 ) {

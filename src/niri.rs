@@ -1,10 +1,49 @@
 use std::fs;
 use std::io::{BufRead, BufReader};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// Detect Niri socket with validation and fallback
+fn detect_niri_socket() -> Option<PathBuf> {
+    // Check NIRI_SOCKET env var first
+    if let Ok(socket_path) = std::env::var("NIRI_SOCKET") {
+        let path = PathBuf::from(&socket_path);
+        if path.exists() {
+            info!("Using NIRI_SOCKET from env: {}", socket_path);
+            return Some(path);
+        } else {
+            warn!("NIRI_SOCKET env var set but file doesn't exist: {}", socket_path);
+        }
+    }
+
+    // Fallback: scan /run/user/{uid}/niri.*
+    let uid = unsafe { libc::getuid() };
+    let runtime_dir = format!("/run/user/{}", uid);
+
+    if let Ok(entries) = std::fs::read_dir(&runtime_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if let Some(filename) = path.file_name() {
+                if filename.to_string_lossy().starts_with("niri.") && path.exists() {
+                    info!("Found Niri socket via scan: {}", path.display());
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    error!("No valid Niri socket found");
+    None
+}
+
+/// Check if Niri is available
+pub fn is_niri_available() -> bool {
+    detect_niri_socket().is_some()
+}
 
 #[derive(Debug)]
 pub struct WindowInfo {
@@ -58,7 +97,21 @@ fn get_focused_window_info() -> WindowInfo {
 /// Start monitoring niri window focus events
 /// Returns immediately after spawning the monitor thread
 pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
+    // Detect socket before spawning thread
+    let socket_path = match detect_niri_socket() {
+        Some(path) => path,
+        None => {
+            error!("Cannot start niri monitor: no socket found");
+            return;
+        }
+    };
+
     thread::spawn(move || {
+        // Set NIRI_SOCKET env for this thread
+        if std::env::var("NIRI_SOCKET").is_err() {
+            std::env::set_var("NIRI_SOCKET", &socket_path);
+        }
+
         loop {
             info!("Starting niri event stream monitor...");
             info!("Watching for gamescope windows...");

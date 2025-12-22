@@ -2,7 +2,10 @@ use evdev::Key;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::config::{Action as ConfigAction, Config, KeyCode, Layer, SocdMode};
+use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
+
+// SOCD uses last input priority mode hardcoded
+const SOCD_MODE_LAST_INPUT_PRIORITY: bool = true;
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
@@ -17,6 +20,10 @@ enum KeyAction {
     HomeRowModPending { tap_key: KeyCode, hold_key: KeyCode },
     /// Home row mod holding base key (double-tap-and-hold)
     HomeRowModHoldingBase { base_key: KeyCode },
+    /// Overload pending decision
+    OverloadPending { tap_key: KeyCode, hold_key: KeyCode },
+    /// Overload holding (double-tap)
+    OverloadHolding { hold_key: KeyCode },
     /// SOCD managed key
     SocdManaged,
 }
@@ -44,6 +51,11 @@ pub struct KeymapProcessor {
     /// Game mode remaps from config
     game_mode_remaps: HashMap<KeyCode, ConfigAction>,
 
+    /// Tapping term in ms (for OVERLOAD timing)
+    tapping_term_ms: u32,
+    /// Overload press times for timing calculation
+    overload_press_times: HashMap<KeyCode, Instant>,
+
     /// SOCD state tracking
     socd_w_held: bool,
     socd_s_held: bool,
@@ -52,7 +64,6 @@ pub struct KeymapProcessor {
     socd_last_vertical: Option<KeyCode>,
     socd_last_horizontal: Option<KeyCode>,
     socd_active_keys: [Option<KeyCode>; 2], // [vertical, horizontal]
-    socd_mode: SocdMode,
 
     /// Password from config
     password: Option<String>,
@@ -78,6 +89,8 @@ impl KeymapProcessor {
             layers,
             game_mode_active: false,
             game_mode_remaps: config.game_mode.remaps.clone(),
+            tapping_term_ms: config.tapping_term_ms,
+            overload_press_times: HashMap::new(),
             socd_w_held: false,
             socd_s_held: false,
             socd_a_held: false,
@@ -85,7 +98,6 @@ impl KeymapProcessor {
             socd_last_vertical: None,
             socd_last_horizontal: None,
             socd_active_keys: [None; 2],
-            socd_mode: config.game_mode.socd.mode,
             password: config.password.clone(),
             password_last_tap: None,
         }
@@ -154,6 +166,24 @@ impl KeymapProcessor {
                 actions.push(KeyAction::Layer(layer));
                 self.held_keys.insert(keycode, actions);
                 ProcessResult::None
+            }
+            Some(ConfigAction::OVERLOAD(tap_key, hold_key)) => {
+                // Overload - simple tap/hold without permissive hold logic
+                // Record press time
+                self.overload_press_times.insert(keycode, Instant::now());
+
+                // Check for double-tap
+                if self.is_double_tap_overload(keycode) {
+                    // Double-tap: hold the base (tap) key
+                    actions.push(KeyAction::OverloadHolding { hold_key: tap_key });
+                    self.held_keys.insert(keycode, actions);
+                    ProcessResult::EmitKey(tap_key, true)
+                } else {
+                    // Pending - emit hold key immediately
+                    actions.push(KeyAction::OverloadPending { tap_key, hold_key });
+                    self.held_keys.insert(keycode, actions);
+                    ProcessResult::EmitKey(hold_key, true)
+                }
             }
             Some(ConfigAction::Socd(key1, _key2)) => {
                 // SOCD handling
@@ -231,6 +261,26 @@ impl KeymapProcessor {
                     KeyAction::HomeRowModHoldingBase { base_key } => {
                         // Release the base key
                         events.push((base_key, false));
+                    }
+                    KeyAction::OverloadPending { tap_key, hold_key } => {
+                        // Check elapsed time to decide tap vs hold
+                        if let Some(press_time) = self.overload_press_times.remove(&keycode) {
+                            let elapsed = Instant::now().duration_since(press_time).as_millis() as u32;
+
+                            if elapsed < self.tapping_term_ms {
+                                // Quick tap: release hold, tap the tap_key
+                                events.push((hold_key, false));
+                                return ProcessResult::TapKeyPressRelease(tap_key);
+                            } else {
+                                // Held: just release hold
+                                events.push((hold_key, false));
+                            }
+                        } else {
+                            events.push((hold_key, false));
+                        }
+                    }
+                    KeyAction::OverloadHolding { hold_key } => {
+                        events.push((hold_key, false));
                     }
                     KeyAction::SocdManaged => {
                         // Apply SOCD release logic
@@ -341,6 +391,15 @@ impl KeymapProcessor {
         }
     }
 
+    /// Check if this is a double-tap for OVERLOAD (hold base key)
+    fn is_double_tap_overload(&self, keycode: KeyCode) -> bool {
+        if let Some(press_time) = self.overload_press_times.get(&keycode) {
+            let elapsed = Instant::now().duration_since(*press_time).as_millis() as u32;
+            return elapsed < self.double_tap_window_ms;
+        }
+        false
+    }
+
     // === SOCD Helpers ===
 
     /// Handle SOCD key press, returns new active keys [vertical, horizontal]
@@ -383,7 +442,7 @@ impl KeymapProcessor {
     fn compute_socd_active_keys(&mut self) -> [Option<KeyCode>; 2] {
         // Index 0 = vertical key, 1 = horizontal key
 
-        // Vertical resolution
+        // Vertical resolution (using last input priority)
         if self.socd_w_held && !self.socd_s_held {
             self.socd_active_keys[0] = Some(KeyCode::KC_W);
         } else if self.socd_s_held && !self.socd_w_held {
@@ -395,7 +454,7 @@ impl KeymapProcessor {
             self.socd_active_keys[0] = None;
         }
 
-        // Horizontal resolution
+        // Horizontal resolution (using last input priority)
         if self.socd_a_held && !self.socd_d_held {
             self.socd_active_keys[1] = Some(KeyCode::KC_A);
         } else if self.socd_d_held && !self.socd_a_held {

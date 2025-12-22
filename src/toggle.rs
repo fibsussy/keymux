@@ -116,8 +116,8 @@ pub fn run_toggle() -> Result<()> {
 
     config.enabled_keyboards = Some(enabled_keyboards.clone());
 
-    // Save config
-    config.save(&config_path)?;
+    // Save config (preserving format)
+    config.save_enabled_keyboards_only(&config_path)?;
 
     // Send IPC request to daemon to hot-reload
     match send_request(&IpcRequest::ToggleKeyboards) {
