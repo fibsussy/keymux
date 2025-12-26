@@ -244,8 +244,16 @@ pub fn should_enable_gamemode(window_info: &WindowInfo) -> bool {
         }
     }
 
-    // TODO: Add app-specific game detection here
-    // Example: Some("org.vinegarhq.Sober") => return true,
+    // Check for specific gaming applications
+    const GAME_APP_IDS: &[&str] = &[
+        "org.vinegarhq.Sober",
+    ];
+
+    if let Some(app_id) = &window_info.app_id {
+        if GAME_APP_IDS.contains(&app_id.as_str()) {
+            return true;
+        }
+    }
 
     // If we have a PID, check environment and process tree
     if let Some(pid) = window_info.pid {
