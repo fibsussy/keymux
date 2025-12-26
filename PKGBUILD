@@ -12,7 +12,7 @@ options=('!debug')
 install=$pkgname.install
 
 source=(
-    "keyboard-middleware::git+file://$PWD"
+    "keyboard-middleware::git+https://github.com/fibsussy/keyboard-middleware.git#branch=main"
 )
 sha256sums=('SKIP')
 
