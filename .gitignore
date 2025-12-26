@@ -3,8 +3,11 @@
 
 # Arch package build artifacts
 /pkg/
+/src/
 *.pkg.tar.zst
 *.pkg.tar.xz
+*.tar.gz
+keyboard-middleware-linux-*
 
 # Configuration files
 config.toml

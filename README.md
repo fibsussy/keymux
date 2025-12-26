@@ -83,17 +83,19 @@
 
 ### One-Line Install (Arch Linux)
 
-**Build from source (default):**
+**Precompiled binary (default, fast):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash
 ```
 
-**Or use precompiled binary:**
+**Or build from source:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s bin
+curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s local
 ```
 
 **Note:** For security, inspect the install script before running it. View it [here](https://github.com/fibsussy/keyboard-middleware/blob/main/install.sh).
+
+**Local development:** When run from within the cloned repo, `./install.sh` defaults to building from source. Use `./install.sh bin` for precompiled binary.
 
 ### Manual Installation
 
@@ -144,9 +146,13 @@ systemctl --user enable --now keyboard-middleware
 #### Using PKGBUILD (Arch Linux)
 
 ```bash
+# Clone and build from source
 git clone https://github.com/fibsussy/keyboard-middleware.git
 cd keyboard-middleware
-makepkg -si
+makepkg -si              # Build from source
+
+# Or use precompiled binary
+makepkg -si -p PKGBUILD.bin
 ```
 
 ### Post-Installation Setup

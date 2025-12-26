@@ -10,32 +10,35 @@ Keyboard Middleware Installer
 Usage: $0 [OPTION]
 
 Options:
-  (none)    Build and install from source (default)
-  bin       Install precompiled binary
+  (none)    Smart default: local build in repo, precompiled binary remotely
+  local     Force build from source (requires rust/cargo)
+  bin       Force precompiled binary install
   --help    Show this help message
 
 Examples:
-  # Build from source (requires rust/cargo)
+  # Local: Build from source (default when in repo)
   $0
 
-  # Install precompiled binary (faster, no build dependencies)
+  # Local: Force precompiled binary
   $0 bin
 
-  # Remote install (build from source)
+  # Remote: Install precompiled binary (default)
   curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash
 
-  # Remote install (precompiled binary)
-  curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s bin
+  # Remote: Build from source (requires rust/cargo)
+  curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/install.sh | bash -s local
 EOF
     exit 0
 }
 
 # Parse arguments
-MODE="local"
+MODE=""
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     show_help
 elif [ "${1:-}" = "bin" ]; then
     MODE="bin"
+elif [ "${1:-}" = "local" ]; then
+    MODE="local"
 fi
 
 # Verify we're on Arch Linux
@@ -49,40 +52,88 @@ fi
 # Detect if we're running from within the repo
 START_DIR=$(pwd)
 if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ]; then
-    # Running from repo - use local files
+    # ====================================================================
+    # LOCAL INSTALL
+    # ====================================================================
     echo "Detected local repository, using local files..."
 
+    # Default to local build if no mode specified
+    if [ -z "$MODE" ]; then
+        MODE="local"
+    fi
+
     if [ "$MODE" = "bin" ]; then
-        echo "Installing precompiled binary (using local PKGBUILD.bin)..."
-        makepkg -si -p PKGBUILD.bin
+        # Local precompiled binary install
+        echo "Installing precompiled binary (using PKGBUILD.bin)..."
+
+        (
+            # Create atomic temp directory with guaranteed cleanup
+            TMP_DIR=$(mktemp -d -t keyboard-middleware-install.XXXXXX)
+            trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+            # Copy minimal files needed
+            cp "$START_DIR/PKGBUILD.bin" "$TMP_DIR/PKGBUILD"
+            cp "$START_DIR/keyboard-middleware.install" "$TMP_DIR/"
+
+            # Build and install in subshell
+            cd "$TMP_DIR"
+            makepkg -si
+        )
+
         echo "keyboard-middleware installed successfully via pacman (precompiled binary)"
     else
-        echo "Building from source (using local PKGBUILD)..."
+        # Local source build - run directly in repo (no temp dir needed)
+        echo "Building from source (using PKGBUILD)..."
         makepkg -si
         echo "keyboard-middleware installed successfully via pacman (built from source)"
     fi
 else
-    # Remote install - download from GitHub
-    TMP_DIR=$(mktemp -d -t keyboard-middleware-install.XXXXXX)
-    trap 'cd "$START_DIR" && rm -rf "$TMP_DIR"' EXIT INT TERM
+    # ====================================================================
+    # REMOTE INSTALL
+    # ====================================================================
+    echo "Remote install detected..."
+
+    # Default to precompiled binary if no mode specified
+    if [ -z "$MODE" ]; then
+        MODE="bin"
+    fi
 
     if [ "$MODE" = "bin" ]; then
-        echo "Installing precompiled binary..."
-        # Download PKGBUILD.bin and install script
-        curl -fsSL -o "$TMP_DIR/PKGBUILD" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD.bin"
-        curl -fsSL -o "$TMP_DIR/keyboard-middleware.install" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
+        echo "Installing precompiled binary from GitHub..."
 
-        cd "$TMP_DIR"
-        makepkg -si --noconfirm
+        (
+            # Create atomic temp directory with guaranteed cleanup
+            TMP_DIR=$(mktemp -d -t keyboard-middleware-install.XXXXXX)
+            trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+            # Download minimal files needed
+            echo "Downloading PKGBUILD.bin and install script..."
+            curl -fsSL -o "$TMP_DIR/PKGBUILD" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD.bin"
+            curl -fsSL -o "$TMP_DIR/keyboard-middleware.install" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
+
+            # Build and install in subshell
+            cd "$TMP_DIR"
+            makepkg -si --noconfirm
+        )
+
         echo "keyboard-middleware installed successfully via pacman (precompiled binary)"
     else
-        echo "Building from source..."
-        # Download PKGBUILD and install script
-        curl -fsSL -o "$TMP_DIR/PKGBUILD" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/PKGBUILD"
-        curl -fsSL -o "$TMP_DIR/keyboard-middleware.install" "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.install"
+        echo "Building from source from GitHub..."
 
-        cd "$TMP_DIR"
-        makepkg -si --noconfirm
+        (
+            # Create atomic temp directory with guaranteed cleanup
+            TMP_DIR=$(mktemp -d -t keyboard-middleware-install.XXXXXX)
+            trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+            # Clone the repository
+            echo "Cloning repository..."
+            git clone https://github.com/fibsussy/keyboard-middleware.git "$TMP_DIR/repo"
+
+            # Build and install in subshell
+            cd "$TMP_DIR/repo"
+            makepkg -si --noconfirm
+        )
+
         echo "keyboard-middleware installed successfully via pacman (built from source)"
     fi
 fi

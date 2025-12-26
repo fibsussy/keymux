@@ -1,4 +1,5 @@
 # Maintainer: fibsussy <noahlykins@gmail.com>
+# Local build - builds from current directory without network requests
 pkgname=keyboard-middleware
 pkgver=0.2.6
 pkgrel=1
@@ -11,18 +12,16 @@ makedepends=('rust' 'cargo')
 options=('!debug')
 install=$pkgname.install
 
-source=(
-    "keyboard-middleware::git+https://github.com/fibsussy/keyboard-middleware.git#branch=main"
-)
-sha256sums=('SKIP')
+source=()
+sha256sums=()
 
 build() {
-    cd "$srcdir/$pkgname"
+    cd "$startdir"
     cargo build --release --locked
 }
 
 package() {
-    cd "$srcdir/$pkgname"
+    cd "$startdir"
 
     # Install compiled binary
     install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
