@@ -22,21 +22,26 @@ fi
 source=(
     "https://github.com/fibsussy/keyboard-middleware/releases/download/v${pkgver}/keyboard-middleware-linux-${_arch}.tar.gz"
     "keyboard-middleware.service::https://raw.githubusercontent.com/fibsussy/keyboard-middleware/v${pkgver}/keyboard-middleware.service"
+    "keyboard-middleware-niri.service::https://raw.githubusercontent.com/fibsussy/keyboard-middleware/v${pkgver}/keyboard-middleware-niri.service"
     "config.example.ron::https://raw.githubusercontent.com/fibsussy/keyboard-middleware/v${pkgver}/config.example.ron"
 )
-sha256sums=('SKIP' 'SKIP' 'SKIP')  # Update with actual checksums for releases
+sha256sums=('SKIP' 'SKIP' 'SKIP' 'SKIP')  # Update with actual checksums for releases
 
 package() {
-    # Install precompiled binary
+    # Install precompiled binaries
     install -Dm755 "$srcdir/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm755 "$srcdir/$pkgname-niri" "$pkgdir/usr/bin/$pkgname-niri"
 
-    # Install systemd user service
-    install -Dm644 "$srcdir/$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+    # Install systemd system service (runs as root)
+    install -Dm644 "$srcdir/$pkgname.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"
+
+    # Install systemd user service (niri watcher)
+    install -Dm644 "$srcdir/$pkgname-niri.service" "$pkgdir/usr/lib/systemd/user/$pkgname-niri.service"
 
     # Install example config
     install -Dm644 "$srcdir/config.example.ron" "$pkgdir/usr/share/doc/$pkgname/config.example.ron"
 
-    # Generate and install shell completions
+    # Generate and install shell completions for main binary
     install -dm755 "$pkgdir/usr/share/bash-completion/completions"
     install -dm755 "$pkgdir/usr/share/zsh/site-functions"
     install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"

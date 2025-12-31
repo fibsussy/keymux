@@ -28,7 +28,15 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run the keyboard middleware daemon
-    Daemon,
+    Daemon {
+        /// Path to config file (default: ~/.config/keyboard-middleware/config.ron)
+        #[arg(short, long)]
+        config: Option<std::path::PathBuf>,
+
+        /// User to run as (for root execution, uses that user's config)
+        #[arg(short, long)]
+        user: Option<String>,
+    },
 
     /// List all detected keyboards
     List,
@@ -51,7 +59,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Daemon) => {
+        Some(Commands::Daemon { config, user }) => {
             // Initialize tracing for daemon
             tracing_subscriber::fmt()
                 .with_target(false)
@@ -59,7 +67,7 @@ fn main() -> Result<()> {
                 .with_file(false)
                 .init();
 
-            let mut daemon = Daemon::new()?;
+            let mut daemon = Daemon::new(config.clone(), user.clone())?;
             daemon.run()?;
         }
         Some(Commands::List) => {

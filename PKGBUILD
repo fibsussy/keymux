@@ -23,16 +23,20 @@ build() {
 package() {
     cd "$startdir"
 
-    # Install compiled binary
+    # Install compiled binaries
     install -Dm755 "target/release/$pkgname" "$pkgdir/usr/bin/$pkgname"
+    install -Dm755 "target/release/$pkgname-niri" "$pkgdir/usr/bin/$pkgname-niri"
 
-    # Install systemd user service
-    install -Dm644 "$pkgname.service" "$pkgdir/usr/lib/systemd/user/$pkgname.service"
+    # Install systemd system service (runs as root)
+    install -Dm644 "$pkgname.service" "$pkgdir/usr/lib/systemd/system/$pkgname.service"
+
+    # Install systemd user service (niri watcher)
+    install -Dm644 "$pkgname-niri.service" "$pkgdir/usr/lib/systemd/user/$pkgname-niri.service"
 
     # Install example config
     install -Dm644 "config.example.ron" "$pkgdir/usr/share/doc/$pkgname/config.example.ron"
 
-    # Generate and install shell completions
+    # Generate and install shell completions for main binary
     install -dm755 "$pkgdir/usr/share/bash-completion/completions"
     install -dm755 "$pkgdir/usr/share/zsh/site-functions"
     install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"

@@ -2,7 +2,7 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Read};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, channel, Receiver, Sender};
@@ -13,8 +13,7 @@ use tracing::{debug, error, info, warn};
 use crate::config::Config;
 use crate::event_processor;
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};
-use crate::ipc::{get_socket_path, IpcRequest, IpcResponse};
-use crate::niri::{self, NiriEvent};
+use crate::ipc::{get_root_socket_path, IpcRequest, IpcResponse};
 
 /// Hotplug event from udev monitor
 #[derive(Debug)]
@@ -26,7 +25,58 @@ enum HotplugEvent {
 /// IPC command from client
 #[derive(Debug)]
 enum IpcCommand {
-    Reload,
+    /// Reload configuration for a specific user
+    Reload { username: String },
+    /// Set game mode for a specific user
+    SetGameMode { username: String, enabled: bool },
+}
+
+/// Get username from Unix socket peer credentials using SO_PEERCRED
+fn get_peer_username(stream: &UnixStream) -> Result<String> {
+    use std::os::unix::io::AsRawFd;
+    use std::mem;
+
+    #[repr(C)]
+    struct UCred {
+        pid: libc::pid_t,
+        uid: libc::uid_t,
+        gid: libc::gid_t,
+    }
+
+    let fd = stream.as_raw_fd();
+    let mut cred: UCred = unsafe { mem::zeroed() };
+    let mut len = mem::size_of::<UCred>() as libc::socklen_t;
+
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            &mut cred as *mut UCred as *mut libc::c_void,
+            &mut len,
+        )
+    };
+
+    if ret != 0 {
+        return Err(anyhow::anyhow!("Failed to get peer credentials"));
+    }
+
+    let uid = cred.uid;
+
+    // Convert uid to username
+    let output = Command::new("id")
+        .arg("-nu")
+        .arg(uid.to_string())
+        .output()?;
+
+    if output.status.success() {
+        let username = String::from_utf8(output.stdout)?
+            .trim()
+            .to_string();
+        Ok(username)
+    } else {
+        Err(anyhow::anyhow!("Failed to get username for uid {}", uid))
+    }
 }
 
 /// Main daemon orchestrator
@@ -37,26 +87,29 @@ pub struct Daemon {
     hotplug_rx: Receiver<HotplugEvent>,
     /// IPC command receiver
     ipc_rx: Receiver<IpcCommand>,
-    /// Niri event receiver
-    niri_rx: Receiver<NiriEvent>,
     /// File watcher event receiver
     file_watcher_rx: Receiver<Event>,
-    /// Configuration
-    config: Config,
+    /// Per-user configurations (username -> config)
+    user_configs: HashMap<String, Config>,
+    /// Keyboard ownership (keyboard_id -> username)
+    keyboard_owners: HashMap<KeyboardId, String>,
     /// Active event processor threads - maps `KeyboardId` to shutdown channel Sender
     active_processors: HashMap<KeyboardId, Sender<()>>,
     /// Game mode senders - maps `KeyboardId` to game mode toggle channel Sender
     game_mode_senders: HashMap<KeyboardId, Sender<bool>>,
-    /// Current game mode state
-    game_mode_active: bool,
+    /// Per-user game mode state (username -> game_mode_active)
+    user_game_modes: HashMap<String, bool>,
 }
 
 #[derive(Debug, Clone)]
 struct KeyboardMeta {
     #[allow(dead_code)]
     name: String,
-    device_path: Option<String>,
+    /// All event device paths for this logical keyboard
+    device_paths: Vec<String>,
     connected: bool,
+    /// Number of active event processors for this keyboard
+    active_device_count: usize,
 }
 
 /// Start file watcher for config file
@@ -163,7 +216,8 @@ fn start_udev_monitor(tx: Sender<HotplugEvent>) {
 /// Start IPC listener for client commands
 fn start_ipc_listener(tx: Sender<IpcCommand>) {
     thread::spawn(move || {
-        let socket_path = get_socket_path();
+        // Root daemon always uses /run/keyboard-middleware.sock
+        let socket_path = get_root_socket_path();
 
         // Remove old socket if it exists
         let _ = std::fs::remove_file(&socket_path);
@@ -171,6 +225,13 @@ fn start_ipc_listener(tx: Sender<IpcCommand>) {
         let listener = match UnixListener::bind(&socket_path) {
             Ok(l) => {
                 info!("IPC socket listening at {:?}", socket_path);
+
+                // Set socket permissions so all users can connect
+                use std::os::unix::fs::PermissionsExt;
+                if let Err(e) = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666)) {
+                    error!("Failed to set socket permissions: {}", e);
+                }
+
                 l
             }
             Err(e) => {
@@ -182,6 +243,15 @@ fn start_ipc_listener(tx: Sender<IpcCommand>) {
         for stream in listener.incoming() {
             match stream {
                 Ok(mut stream) => {
+                    // Extract username from socket credentials
+                    let username = match get_peer_username(&stream) {
+                        Ok(u) => u,
+                        Err(e) => {
+                            error!("Failed to get peer username: {}", e);
+                            continue;
+                        }
+                    };
+
                     // Read request
                     let mut len_buf = [0u8; 4];
                     if stream.read_exact(&mut len_buf).is_err() {
@@ -199,13 +269,18 @@ fn start_ipc_listener(tx: Sender<IpcCommand>) {
                         Err(_) => continue,
                     };
 
-                    debug!("IPC request: {:?}", request);
+                    debug!("IPC request from user '{}': {:?}", username, request);
 
                     // Handle request
                     let response = match request {
                         IpcRequest::ToggleKeyboards => {
-                            // Send reload command to daemon
-                            let _ = tx.send(IpcCommand::Reload);
+                            // Send reload command to daemon for this user
+                            let _ = tx.send(IpcCommand::Reload { username: username.clone() });
+                            IpcResponse::Ok
+                        }
+                        IpcRequest::SetGameMode(enabled) => {
+                            // Send game mode command for this user
+                            let _ = tx.send(IpcCommand::SetGameMode { username: username.clone(), enabled });
                             IpcResponse::Ok
                         }
                         _ => IpcResponse::Error("Not implemented".to_string()),
@@ -228,10 +303,9 @@ fn start_ipc_listener(tx: Sender<IpcCommand>) {
 }
 
 impl Daemon {
-    pub fn new() -> Result<Self> {
+    pub fn new(_config_path_opt: Option<std::path::PathBuf>, _user_opt: Option<String>) -> Result<Self> {
         let (hotplug_tx, hotplug_rx) = mpsc::channel();
         let (ipc_tx, ipc_rx) = mpsc::channel();
-        let (niri_tx, niri_rx) = mpsc::channel();
         let (file_watcher_tx, file_watcher_rx) = mpsc::channel();
 
         // Start udev monitor in background
@@ -240,43 +314,83 @@ impl Daemon {
         // Start IPC listener
         start_ipc_listener(ipc_tx);
 
-        // Load config
-        let config_path = Config::default_path()?;
-        let config = Config::load(&config_path)?;
+        // Note: Configs are now loaded on-demand per user when they make IPC requests
+        info!("Daemon starting in multi-user mode - configs loaded per user on demand");
 
-        // Start file watcher
-        if let Err(e) = start_config_watcher(&config_path, file_watcher_tx) {
-            error!("Failed to start config file watcher: {}", e);
-            warn!("Hot-reload will not work automatically");
-        }
+        // File watcher is disabled in multi-user mode for now
+        // TODO: Watch all user config directories
+        let _ = file_watcher_tx; // Suppress unused warning
 
-        // Start niri monitor if auto_detect is enabled
-        if crate::config::GameMode::auto_detect_enabled() {
-            if niri::is_niri_available() {
-                info!("Starting niri window monitor for automatic game mode detection");
-                niri::start_niri_monitor(niri_tx);
-            } else {
-                warn!("Automatic game mode detection enabled but Niri socket not found");
-                warn!("Game mode detection will be unavailable");
-            }
-        } else {
-            info!("Automatic game mode detection is disabled");
-        }
-
-        info!("Loaded config with {} enabled keyboard(s)",
-              config.enabled_keyboards.as_ref().map_or(0, std::vec::Vec::len));
+        // Niri monitoring has been moved to keyboard-middleware-niri user service
+        // That service will send SetGameMode IPC commands to this daemon
+        info!("Niri window monitoring should be handled by keyboard-middleware-niri user service");
 
         Ok(Self {
             all_keyboards: HashMap::new(),
             hotplug_rx,
             ipc_rx,
-            niri_rx,
             file_watcher_rx,
-            config,
+            user_configs: HashMap::new(),
+            keyboard_owners: HashMap::new(),
             active_processors: HashMap::new(),
             game_mode_senders: HashMap::new(),
-            game_mode_active: false,
+            user_game_modes: HashMap::new(),
         })
+    }
+
+    /// Load or reload a user's config
+    fn load_user_config(&mut self, username: &str) -> Result<()> {
+        let user_home = std::path::PathBuf::from(format!("/home/{}", username));
+        let user_config_path = user_home.join(".config/keyboard-middleware/config.ron");
+
+        info!("Loading config for user '{}' from: {}", username, user_config_path.display());
+
+        let config = Config::load(&user_config_path)
+            .map_err(|e| anyhow::anyhow!("Failed to load config for user '{}' from '{}': {}", username, user_config_path.display(), e))?;
+
+        info!("Loaded config for user '{}' with {} enabled keyboard(s)",
+              username,
+              config.enabled_keyboards.as_ref().map_or(0, std::vec::Vec::len));
+
+        self.user_configs.insert(username.to_string(), config);
+        Ok(())
+    }
+
+    /// Get a user's config, loading it if not already loaded
+    fn get_user_config(&mut self, username: &str) -> Result<&Config> {
+        if !self.user_configs.contains_key(username) {
+            self.load_user_config(username)?;
+        }
+        Ok(self.user_configs.get(username).unwrap())
+    }
+
+    /// Auto-load configs for users with existing config files
+    fn auto_load_user_configs(&mut self) {
+        // Scan /home for user directories
+        let home_entries = match std::fs::read_dir("/home") {
+            Ok(entries) => entries,
+            Err(e) => {
+                warn!("Failed to scan /home for user configs: {}", e);
+                return;
+            }
+        };
+
+        for entry in home_entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() {
+                    if let Some(username) = entry.file_name().to_str() {
+                        // Check if this user has a config file
+                        let config_path = entry.path().join(".config/keyboard-middleware/config.ron");
+                        if config_path.exists() {
+                            info!("Found config for user '{}', auto-loading keyboards...", username);
+                            if let Err(e) = self.discover_keyboards_for_user(username) {
+                                warn!("Failed to auto-load keyboards for user '{}': {}", username, e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Start the daemon
@@ -287,6 +401,9 @@ impl Daemon {
         self.discover_keyboards();
 
         info!("Daemon ready, {} keyboard(s) discovered", self.all_keyboards.len());
+
+        // Auto-load configs for users with existing config files
+        self.auto_load_user_configs();
 
         // Main daemon loop - event-driven, no polling!
         loop {
@@ -309,9 +426,15 @@ impl Daemon {
 
             // Check for IPC commands (non-blocking)
             match self.ipc_rx.try_recv() {
-                Ok(IpcCommand::Reload) => {
-                    info!("IPC: Reload requested");
-                    self.perform_hot_reload();
+                Ok(IpcCommand::Reload { username }) => {
+                    info!("IPC: Reload requested for user '{}'", username);
+                    if let Err(e) = self.perform_hot_reload_for_user(&username) {
+                        error!("Failed to reload config for user '{}': {}", username, e);
+                    }
+                }
+                Ok(IpcCommand::SetGameMode { username, enabled }) => {
+                    info!("IPC: Set game mode {} for user '{}'", if enabled { "ON" } else { "OFF" }, username);
+                    self.set_game_mode_for_user(&username, enabled);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // No IPC command
@@ -325,43 +448,18 @@ impl Daemon {
             // Check for config file changes (non-blocking)
             match self.file_watcher_rx.try_recv() {
                 Ok(_event) => {
-                    info!("Config file changed, triggering hot-reload...");
-                    // Add debouncing to avoid multiple rapid reloads
-                    thread::sleep(Duration::from_millis(100));
-
-                    // Drain any additional events
-                    while self.file_watcher_rx.try_recv().is_ok() {}
-
-                    // Perform reload
-                    self.perform_hot_reload();
+                    // File watcher is disabled in multi-user mode
+                    // Users trigger reloads explicitly via IPC
+                    debug!("Config file change detected but file watcher is disabled in multi-user mode");
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     // No file changes
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    warn!("File watcher died");
+                    // File watcher not active in multi-user mode
                 }
             }
 
-            match self.niri_rx.try_recv() {
-                Ok(NiriEvent::WindowFocusChanged(window_info)) => {
-                    // Determine if game mode should be active
-                    let should_enable = niri::should_enable_gamemode(&window_info);
-
-                    // Only update and broadcast if state changed
-                    if should_enable != self.game_mode_active {
-                        self.game_mode_active = should_enable;
-                        info!("Game mode {}", if should_enable { "ENABLED" } else { "DISABLED" });
-                        self.broadcast_game_mode(should_enable);
-                    }
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // No niri event
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    warn!("Niri monitor died");
-                }
-            }
 
             // Sleep briefly to avoid busy-waiting
             thread::sleep(Duration::from_millis(100));
@@ -371,187 +469,222 @@ impl Daemon {
         Ok(())
     }
 
-    /// Broadcast game mode state to all active processors
-    fn broadcast_game_mode(&self, active: bool) {
-        for (id, tx) in &self.game_mode_senders {
-            if let Err(e) = tx.send(active) {
-                debug!("Failed to send game mode state to {}: {}", id, e);
+    /// Perform hot-reload for a specific user
+    fn perform_hot_reload_for_user(&mut self, username: &str) -> Result<()> {
+        info!("Starting hot-reload for user '{}'...", username);
+
+        // 1. Reload config for this user
+        self.load_user_config(username)?;
+
+        // 2. Stop processors owned by this user
+        let keyboards_to_stop: Vec<KeyboardId> = self.keyboard_owners
+            .iter()
+            .filter(|(_, owner)| *owner == username)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        info!("Stopping {} processors owned by '{}'", keyboards_to_stop.len(), username);
+        for id in &keyboards_to_stop {
+            if let Some(shutdown_tx) = self.active_processors.remove(id) {
+                let _ = shutdown_tx.send(());
+                debug!("Sent shutdown signal to {} (owner: {})", id, username);
             }
+            self.game_mode_senders.remove(id);
+            self.keyboard_owners.remove(id);
         }
-    }
 
-    /// Perform hot-reload: kill threads, reload config, respawn threads
-    fn perform_hot_reload(&mut self) {
-        info!("Starting hot-reload...");
-
-        // 1. Stop all active processors to release devices
-        info!("Stopping {} active processors for hot-reload...", self.active_processors.len());
-
-        // Send shutdown signal to all processors and wait for them to exit
-        for (id, shutdown_tx) in self.active_processors.drain() {
-            let _ = shutdown_tx.send(());
-            debug!("Sent shutdown signal to {}", id);
-        }
-        self.game_mode_senders.clear();
-
-        // Give threads time to actually exit and release device file descriptors
-        // This is critical - the old thread must close the device before we can reopen it
+        // Give threads time to exit
         thread::sleep(Duration::from_millis(500));
 
-        // 2. Reload config from disk
-        let config_path = match Config::default_path() {
-            Ok(path) => path,
-            Err(e) => {
-                error!("Failed to get config path: {}", e);
-                return;
-            }
-        };
+        // 3. Rediscover keyboards and restart this user's enabled ones
+        self.discover_keyboards_for_user(username)?;
 
-        match Config::load(&config_path) {
-            Ok(new_config) => {
-                self.config = new_config;
-                info!("Config reloaded successfully");
+        info!("Hot-reload complete for user '{}'! {} total processors active", username, self.active_processors.len());
 
-                // Notify user of successful reload
-                let _ = std::process::Command::new("notify-send")
-                    .arg("-a")
-                    .arg("Keyboard Middleware")
-                    .arg("Config Reloaded")
-                    .arg("Configuration reloaded successfully")
-                    .spawn();
-            }
-            Err(e) => {
-                error!("Failed to reload config: {}", e);
-                error!("Keeping previous config");
+        // Notify user of successful reload
+        let _ = std::process::Command::new("sudo")
+            .arg("-u")
+            .arg(username)
+            .arg("notify-send")
+            .arg("-a")
+            .arg("Keyboard Middleware")
+            .arg("Config Reloaded")
+            .arg("Configuration reloaded successfully")
+            .spawn();
 
-                // Notify user of config error
-                let error_msg = format!("Invalid config: {e}");
-                let _ = std::process::Command::new("notify-send")
-                    .arg("-u")
-                    .arg("critical")
-                    .arg("-a")
-                    .arg("Keyboard Middleware")
-                    .arg("Config Error")
-                    .arg(&error_msg)
-                    .spawn();
-
-                return;
-            }
-        }
-
-        // 3. Run discover_keyboards which will restart enabled keyboards
-        // Since we removed all processors above, discover_keyboards will see
-        // all keyboards as needing to be started
-        self.discover_keyboards();
-
-        info!("Hot-reload complete! {} processors active", self.active_processors.len());
+        Ok(())
     }
 
-    /// Discover all connected keyboards
-    fn discover_keyboards(&mut self) {
-        // First, mark all existing keyboards as disconnected
-        for meta in self.all_keyboards.values_mut() {
-            meta.connected = false;
-        }
+    /// Set game mode state for a specific user
+    fn set_game_mode_for_user(&mut self, username: &str, enabled: bool) {
+        // Update per-user game mode state
+        self.user_game_modes.insert(username.to_string(), enabled);
 
-        // Then discover currently connected keyboards
+        // Broadcast to all keyboards owned by this user
+        let keyboards_to_update: Vec<KeyboardId> = self.keyboard_owners
+            .iter()
+            .filter(|(_, owner)| *owner == username)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        info!("Broadcasting game mode {} to {} keyboards owned by '{}'",
+              if enabled { "ON" } else { "OFF" },
+              keyboards_to_update.len(),
+              username);
+
+        for id in keyboards_to_update {
+            if let Some(sender) = self.game_mode_senders.get(&id) {
+                let _ = sender.send(enabled);
+            }
+        }
+    }
+
+    /// Discover keyboards and start processors for a specific user's enabled keyboards
+    fn discover_keyboards_for_user(&mut self, username: &str) -> Result<()> {
         let keyboards = find_all_keyboards();
 
-        // Get enabled keyboard IDs from config
-        let enabled_ids: HashSet<String> = self.config
-            .enabled_keyboards
-            .as_ref()
-            .map(|ids| ids.iter().cloned().collect())
-            .unwrap_or_default();
+        // Get this user's enabled keyboard IDs and keyboard configs
+        // We need to collect these first to avoid borrow conflicts
+        let (enabled_ids, keyboard_configs): (HashSet<String>, HashMap<String, Config>) = {
+            let user_config = self.get_user_config(username)?;
+            let ids: HashSet<String> = user_config
+                .enabled_keyboards
+                .as_ref()
+                .map(|ids| ids.iter().cloned().collect())
+                .unwrap_or_default();
 
-        // Track which keyboards are currently connected
-        let mut connected_ids = HashSet::new();
+            // Pre-fetch all keyboard configs for enabled keyboards
+            let configs: HashMap<String, Config> = ids
+                .iter()
+                .map(|id| (id.clone(), user_config.for_keyboard(id)))
+                .collect();
 
-        for (id, (device, name)) in keyboards {
-            let device_path = device.physical_path().map(std::string::ToString::to_string);
+            (ids, configs)
+        };
+
+        let user_game_mode = self.user_game_modes.get(username).copied().unwrap_or(false);
+
+        for (id, logical_kb) in keyboards {
             let id_str = id.to_string();
-            connected_ids.insert(id.clone());
 
-            // Update or insert keyboard
-            if let Some(meta) = self.all_keyboards.get_mut(&id) {
-                // Keyboard was known before, update it
-                meta.connected = true;
-                meta.device_path = device_path;
-                info!("Re-discovered keyboard: {} ({})", name, id);
-            } else {
-                // New keyboard
-                self.all_keyboards.insert(
-                    id.clone(),
-                    KeyboardMeta {
-                        name: name.clone(),
-                        device_path,
-                        connected: true,
-                    },
-                );
-                info!("Discovered keyboard: {} ({})", name, id);
+            // Only process keyboards enabled by this user
+            if !enabled_ids.contains(&id_str) {
+                continue;
             }
 
-            // Start event processor if enabled and not already processing
-            if enabled_ids.contains(&id_str) && !self.active_processors.contains_key(&id) {
-                info!("Starting event processor for enabled keyboard: {} ({})", name, id);
+            // Check if this keyboard is already owned by another user
+            if let Some(existing_owner) = self.keyboard_owners.get(&id) {
+                if existing_owner != username {
+                    warn!("Keyboard {} is already owned by user '{}', skipping for '{}'",
+                          id, existing_owner, username);
+                    continue;
+                }
+            }
 
-                // Create shutdown channel
+            // Check if processor is already running
+            if self.active_processors.contains_key(&id) {
+                debug!("Processor already running for {}, skipping", id);
+                continue;
+            }
+
+            // Start event processor for this keyboard
+            if let Some((_, first_device)) = logical_kb.devices.into_iter().next() {
+                info!("Starting event processor for user '{}': {} ({})", username, logical_kb.name, id);
+
+                // Create channels
                 let (shutdown_tx, shutdown_rx) = channel();
-                // Create game mode channel
                 let (game_mode_tx, game_mode_rx) = channel();
 
-                // Get keyboard-specific config
-                let keyboard_config = self.config.for_keyboard(&id_str);
+                // Get keyboard-specific config for this user (should always exist since we pre-fetched)
+                let keyboard_config = keyboard_configs.get(&id_str).cloned()
+                    .expect("Keyboard config should have been pre-fetched");
 
                 if let Err(e) = event_processor::start_event_processor(
                     id.clone(),
-                    device,
-                    name,
+                    first_device,
+                    logical_kb.name.clone(),
                     keyboard_config,
                     shutdown_rx,
                     game_mode_rx,
                 ) {
                     error!("Failed to start event processor for {}: {}", id, e);
                 } else {
+                    // Track ownership and processors
                     self.active_processors.insert(id.clone(), shutdown_tx);
-                    self.game_mode_senders.insert(id.clone(), game_mode_tx);
+                    self.game_mode_senders.insert(id.clone(), game_mode_tx.clone());
+                    self.keyboard_owners.insert(id.clone(), username.to_string());
 
-                    // Send current game mode state to newly started processor
-                    if self.game_mode_active {
-                        if let Some(tx) = self.game_mode_senders.get(&id) {
-                            let _ = tx.send(true);
-                        }
-                    }
+                    // Send initial game mode state for this user
+                    let _ = game_mode_tx.send(user_game_mode);
                 }
             }
         }
 
-        // Kill threads for keyboards that are either:
-        // 1. No longer connected (unplugged)
-        // 2. Still connected but disabled in config
+        Ok(())
+    }
+
+    /// Discover all connected keyboards (metadata only, no processor starting)
+    fn discover_keyboards(&mut self) {
+        // First, mark all existing keyboards as disconnected
+        for meta in self.all_keyboards.values_mut() {
+            meta.connected = false;
+        }
+
+        // Then discover currently connected keyboards (now returns LogicalKeyboard)
+        let keyboards = find_all_keyboards();
+
+        // Track which keyboards are currently connected
+        let mut connected_ids = HashSet::new();
+
+        for (id, logical_kb) in keyboards {
+            connected_ids.insert(id.clone());
+
+            // Collect all device paths
+            let device_paths: Vec<String> = logical_kb.devices.iter()
+                .filter_map(|(_path, dev)| dev.physical_path().map(|p| p.to_string()))
+                .collect();
+
+            // Update or insert keyboard
+            if let Some(meta) = self.all_keyboards.get_mut(&id) {
+                // Keyboard was known before, update it
+                meta.connected = true;
+                meta.device_paths = device_paths;
+                debug!("Re-discovered keyboard: {} ({}) with {} device(s)",
+                      logical_kb.name, id, logical_kb.devices.len());
+            } else {
+                // New keyboard
+                self.all_keyboards.insert(
+                    id.clone(),
+                    KeyboardMeta {
+                        name: logical_kb.name.clone(),
+                        device_paths,
+                        connected: true,
+                        active_device_count: 0,
+                    },
+                );
+                info!("Discovered new keyboard: {} ({}) with {} device(s)",
+                      logical_kb.name, id, logical_kb.devices.len());
+            }
+        }
+
+        // Stop processors for disconnected keyboards
         let should_stop: Vec<KeyboardId> = self.active_processors
             .keys()
-            .filter(|id| {
-                let id_str = id.to_string();
-                // Stop if disconnected OR not in enabled list
-                !connected_ids.contains(id) || !enabled_ids.contains(&id_str)
-            })
+            .filter(|id| !connected_ids.contains(id))
             .cloned()
             .collect();
 
         for id in should_stop {
-            if connected_ids.contains(&id) {
-                info!("Keyboard {} disabled, stopping event processor", id);
-            } else {
-                info!("Keyboard {} disconnected, stopping event processor", id);
-            }
+            let owner = self.keyboard_owners.get(&id).map(|s| s.as_str()).unwrap_or("unknown");
+            info!("Keyboard {} (owned by '{}') disconnected, stopping event processor", id, owner);
 
             if let Some(shutdown_tx) = self.active_processors.remove(&id) {
                 // Send shutdown signal (ignore if thread already died)
                 let _ = shutdown_tx.send(());
             }
-            // Remove game mode sender as well
+            // Clean up state
             self.game_mode_senders.remove(&id);
+            self.keyboard_owners.remove(&id);
         }
     }
 }

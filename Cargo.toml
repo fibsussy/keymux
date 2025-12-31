@@ -3,6 +3,14 @@ name = "keyboard-middleware"
 version = "0.2.10"
 edition = "2021"
 
+[[bin]]
+name = "keyboard-middleware"
+path = "src/main.rs"
+
+[[bin]]
+name = "keyboard-middleware-niri"
+path = "src/niri_daemon.rs"
+
 [dependencies]
 evdev = "0.12"
 anyhow = "1.0"

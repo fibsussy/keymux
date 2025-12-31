@@ -1,19 +1,28 @@
 [Unit]
-Description=Keyboard Middleware Daemon
-Documentation=https://github.com/yourusername/keyboard-middleware
-After=graphical-session.target
+Description=Keyboard Middleware Root Daemon
+Documentation=https://github.com/fibsussy/keyboard-middleware
+After=local-fs.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/keyboard-middleware daemon
 Restart=on-failure
 RestartSec=5
-Environment="RUST_LOG=debug"
+Environment="RUST_LOG=info"
 
-# Process management
-KillMode=mixed
-KillSignal=SIGTERM
-TimeoutStopSec=10
+# Capabilities needed for input device access
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_SYS_RAWIO CAP_SETUID CAP_SETGID
+
+# Filesystem access
+# Note: Need to access /sys/class/input for device enumeration
+# and /home/*/config for user configs
+ProtectHome=no
+ReadWritePaths=/run
+
+# Additional sandboxing
+NoNewPrivileges=true
+PrivateTmp=true
+RestrictRealtime=true
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

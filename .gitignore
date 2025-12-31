@@ -3,7 +3,8 @@
 
 # Arch package build artifacts
 /pkg/
-/src/
+# Note: Don't ignore /src/ as it conflicts with Rust source directory
+# makepkg src/ directory is created in /tmp during build
 *.pkg.tar.zst
 *.pkg.tar.xz
 *.tar.gz

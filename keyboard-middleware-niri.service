@@ -1,0 +1,26 @@
+[Unit]
+Description=Keyboard Middleware Niri Window Watcher
+Documentation=https://github.com/fibsussy/keyboard-middleware
+After=graphical-session.target
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/keyboard-middleware-niri
+Restart=on-failure
+RestartSec=5
+Environment="RUST_LOG=info"
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+NoNewPrivileges=true
+RestrictNamespaces=true
+RestrictRealtime=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=graphical-session.target

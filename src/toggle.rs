@@ -29,7 +29,7 @@ pub fn run_toggle() -> Result<()> {
     // Build list of keyboard items for selection
     let mut items: Vec<(KeyboardId, String)> = keyboards
         .into_iter()
-        .map(|(id, (_device, name))| (id, name))
+        .map(|(id, logical_kb)| (id, logical_kb.name))
         .collect();
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
@@ -129,7 +129,7 @@ pub fn run_toggle() -> Result<()> {
         }
         Err(e) => {
             println!("  {} {}", "⚠".bright_yellow(), format!("Daemon not running: {e}").yellow());
-            println!("  {} Start it with: {}", "Tip:".bright_yellow().bold(), "systemctl --user start keyboard-middleware".dimmed());
+            println!("  {} Start it with: {}", "Tip:".bright_yellow().bold(), "sudo systemctl start keyboard-middleware".dimmed());
         }
     }
 

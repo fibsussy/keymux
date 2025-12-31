@@ -19,6 +19,8 @@ pub enum IpcRequest {
     EnableKeyboard(String),
     /// Disable specific keyboard by hardware ID
     DisableKeyboard(String),
+    /// Set game mode state (true = on, false = off)
+    SetGameMode(bool),
     /// Shutdown daemon
     Shutdown,
 }
@@ -51,11 +53,26 @@ pub struct KeyboardInfo {
     pub connected: bool,
 }
 
-/// Get the IPC socket path
-pub fn get_socket_path() -> PathBuf {
+/// Get the IPC socket path for root daemon
+pub fn get_root_socket_path() -> PathBuf {
+    Path::new("/run").join("keyboard-middleware.sock")
+}
+
+/// Get the IPC socket path for user daemon (legacy, for compatibility)
+pub fn get_user_socket_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
     Path::new(&runtime_dir).join("keyboard-middleware.sock")
+}
+
+/// Get the IPC socket path (tries root first, falls back to user)
+pub fn get_socket_path() -> PathBuf {
+    let root_sock = get_root_socket_path();
+    if root_sock.exists() {
+        root_sock
+    } else {
+        get_user_socket_path()
+    }
 }
 
 /// Send an IPC request and receive response

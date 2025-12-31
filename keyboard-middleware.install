@@ -2,54 +2,31 @@ post_install() {
     echo ""
     echo "==> Keyboard Middleware installed successfully!"
     echo ""
-
-    # Copy config files for the installing user
-    if [ -n "$SUDO_USER" ]; then
-        USER_HOME=$(eval echo ~$SUDO_USER)
-        CONFIG_DIR="$USER_HOME/.config/keyboard-middleware"
-
-        echo "==> Setting up config files for $SUDO_USER..."
-        sudo -u "$SUDO_USER" mkdir -p "$CONFIG_DIR"
-
-        # Always copy example config
-        sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.example.ron"
-        echo "    ✓ Copied config.example.ron to $CONFIG_DIR/"
-
-        # Only copy to config.ron if it doesn't exist
-        if [ ! -f "$CONFIG_DIR/config.ron" ]; then
-            sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.ron"
-            echo "    ✓ Created config.ron (edit this file for your keymaps)"
-        else
-            echo "    ℹ config.ron already exists, skipping (your config preserved)"
-        fi
-
-        # Create .gitignore to protect password file
-        if [ ! -f "$CONFIG_DIR/.gitignore" ]; then
-            echo "password.txt" | sudo -u "$SUDO_USER" tee "$CONFIG_DIR/.gitignore" > /dev/null
-            echo "    ✓ Created .gitignore (protects password.txt from git)"
-        fi
-        echo ""
-    else
-        echo "==> Run these commands to set up your config:"
-        echo "    mkdir -p ~/.config/keyboard-middleware"
-        echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.example.ron"
-        echo "    cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron"
-        echo "    echo 'password.txt' > ~/.config/keyboard-middleware/.gitignore"
-        echo ""
-    fi
+    echo "==> Multi-user architecture:"
+    echo "    • Root daemon: manages keyboards (keyboard-middleware.service)"
+    echo "    • User service: monitors Niri windows (keyboard-middleware-niri.service)"
+    echo ""
 
     echo "==> Getting Started:"
-    echo "    1. Edit the config to customize your keymaps:"
+    echo ""
+    echo "    1. Create your config file:"
+    echo "       mkdir -p ~/.config/keyboard-middleware"
+    echo "       cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron"
     echo "       \$EDITOR ~/.config/keyboard-middleware/config.ron"
     echo ""
-    echo "    2. Enable and start the service:"
-    echo "       systemctl --user enable --now keyboard-middleware"
+    echo "    2. Enable and start the root daemon (as root):"
+    echo "       sudo systemctl enable --now keyboard-middleware.service"
     echo ""
     echo "    3. Select which keyboards to enable:"
     echo "       keyboard-middleware toggle"
     echo ""
+    echo "    4. (Optional) Enable Niri window watcher for automatic game mode:"
+    echo "       systemctl --user enable --now keyboard-middleware-niri.service"
+    echo ""
+    echo "==> Each user needs their own config in ~/.config/keyboard-middleware/config.ron"
+    echo "==> The root daemon loads configs per-user on demand"
+    echo ""
     echo "==> Shell completions have been installed system-wide!"
-    echo "    (bash/zsh/fish will auto-load them on next shell start)"
     echo ""
     echo "==> For more info: https://github.com/fibsussy/keyboard-middleware"
     echo ""
@@ -59,26 +36,24 @@ post_upgrade() {
     echo ""
     echo "==> Keyboard Middleware upgraded successfully!"
     echo ""
-
-    # Only update config.example.ron, NEVER touch config.ron
-    if [ -n "$SUDO_USER" ]; then
-        USER_HOME=$(eval echo ~$SUDO_USER)
-        CONFIG_DIR="$USER_HOME/.config/keyboard-middleware"
-
-        if [ -d "$CONFIG_DIR" ]; then
-            sudo -u "$SUDO_USER" cp /usr/share/doc/keyboard-middleware/config.example.ron "$CONFIG_DIR/config.example.ron"
-            echo "==> Updated config.example.ron (your config.ron was NOT touched)"
-
-            # Create .gitignore if it doesn't exist
-            if [ ! -f "$CONFIG_DIR/.gitignore" ]; then
-                echo "password.txt" | sudo -u "$SUDO_USER" tee "$CONFIG_DIR/.gitignore" > /dev/null
-                echo "==> Created .gitignore (protects password.txt from git)"
-            fi
-        fi
-    fi
-
+    echo "==> IMPORTANT: Architecture changed to multi-user root daemon!"
     echo ""
-    echo "==> If the daemon is running, restart it to apply changes:"
-    echo "    systemctl --user restart keyboard-middleware"
+    echo "==> Migration steps:"
+    echo "    1. Stop old user service if running:"
+    echo "       systemctl --user stop keyboard-middleware.service"
+    echo "       systemctl --user disable keyboard-middleware.service"
+    echo ""
+    echo "    2. Move your config to user directory:"
+    echo "       mkdir -p ~/.config/keyboard-middleware"
+    echo "       cp /etc/keyboard-middleware/config.ron ~/.config/keyboard-middleware/config.ron 2>/dev/null || true"
+    echo ""
+    echo "    3. Start new root daemon:"
+    echo "       sudo systemctl enable --now keyboard-middleware.service"
+    echo ""
+    echo "    4. (Optional) Enable Niri watcher for game mode:"
+    echo "       systemctl --user enable --now keyboard-middleware-niri.service"
+    echo ""
+    echo "==> Updated example config available at:"
+    echo "    /usr/share/doc/keyboard-middleware/config.example.ron"
     echo ""
 }

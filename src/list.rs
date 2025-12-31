@@ -32,7 +32,7 @@ pub fn run_list() -> Result<()> {
     // Sort keyboards by name
     let mut items: Vec<(KeyboardId, String)> = keyboards
         .into_iter()
-        .map(|(id, (_device, name))| (id, name))
+        .map(|(id, logical_kb)| (id, logical_kb.name))
         .collect();
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
