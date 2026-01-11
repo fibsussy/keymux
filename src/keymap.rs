@@ -72,7 +72,7 @@ pub struct KeymapProcessor {
 
 impl KeymapProcessor {
     /// Create a new keymap processor from config
-    #[must_use] 
+    #[must_use]
     pub fn new(config: &Config) -> Self {
         let mut layers = HashMap::new();
         for (layer, layer_config) in &config.layers {
@@ -161,7 +161,11 @@ impl KeymapProcessor {
                         for &pending_key in &self.pending_overload.clone() {
                             if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
                                 for action in held_actions {
-                                    if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                    if let KeyAction::OverloadPending {
+                                        tap_key: _,
+                                        hold_key,
+                                    } = *action
+                                    {
                                         self.pending_overload.remove(&pending_key);
                                         *action = KeyAction::OverloadHolding { hold_key };
                                         events.push((hold_key, true));
@@ -221,7 +225,11 @@ impl KeymapProcessor {
                         for &pending_key in &self.pending_overload.clone() {
                             if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
                                 for action in held_actions {
-                                    if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                    if let KeyAction::OverloadPending {
+                                        tap_key: _,
+                                        hold_key,
+                                    } = *action
+                                    {
                                         self.pending_overload.remove(&pending_key);
                                         *action = KeyAction::OverloadHolding { hold_key };
                                         events.push((hold_key, true));
@@ -267,9 +275,11 @@ impl KeymapProcessor {
                     ProcessResult::TapKeyPressRelease(KeyCode::KC_ENT)
                 } else {
                     // First tap: type password
-                    self.password.as_ref().map_or(ProcessResult::None, |password| {
-                        ProcessResult::TypeString(password.clone(), false)
-                    })
+                    self.password
+                        .as_ref()
+                        .map_or(ProcessResult::None, |password| {
+                            ProcessResult::TypeString(password.clone(), false)
+                        })
                 }
             }
             None => {
@@ -290,7 +300,11 @@ impl KeymapProcessor {
                         if let Some(held_actions) = self.held_keys.get_mut(&pending_key) {
                             for action in held_actions {
                                 // Extract hold_key before mutating action
-                                if let KeyAction::OverloadPending { tap_key: _, hold_key } = *action {
+                                if let KeyAction::OverloadPending {
+                                    tap_key: _,
+                                    hold_key,
+                                } = *action
+                                {
                                     // Resolve to hold
                                     self.pending_overload.remove(&pending_key);
                                     *action = KeyAction::OverloadHolding { hold_key };
@@ -331,7 +345,10 @@ impl KeymapProcessor {
                         // Switch back to base layer
                         self.current_layer = Layer::L_BASE;
                     }
-                    KeyAction::HomeRowModPending { tap_key, hold_key: _ } => {
+                    KeyAction::HomeRowModPending {
+                        tap_key,
+                        hold_key: _,
+                    } => {
                         // Released while pending - tap it
                         self.clear_hrm_pending(keycode);
                         self.set_hrm_last_tap(keycode);
@@ -347,7 +364,8 @@ impl KeymapProcessor {
 
                         // Check elapsed time to decide tap vs hold
                         if let Some(press_time) = self.overload_press_times.remove(&keycode) {
-                            let elapsed = Instant::now().duration_since(press_time).as_millis() as u32;
+                            let elapsed =
+                                Instant::now().duration_since(press_time).as_millis() as u32;
 
                             if elapsed < self.tapping_term_ms {
                                 // Quick tap: emit tap key press+release
@@ -556,7 +574,11 @@ impl KeymapProcessor {
     }
 
     /// Generate events to transition from `old_keys` to `new_keys`
-    fn generate_socd_events(&self, old_keys: [Option<KeyCode>; 2], new_keys: [Option<KeyCode>; 2]) -> ProcessResult {
+    fn generate_socd_events(
+        &self,
+        old_keys: [Option<KeyCode>; 2],
+        new_keys: [Option<KeyCode>; 2],
+    ) -> ProcessResult {
         let mut events = Vec::new();
 
         // Release keys that are no longer active
@@ -633,7 +655,7 @@ pub enum ProcessResult {
 
 // === evdev ↔ KeyCode Conversion ===
 
-#[must_use] 
+#[must_use]
 pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
     match key {
         // Letters
@@ -730,7 +752,7 @@ pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
     }
 }
 
-#[must_use] 
+#[must_use]
 pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
     match keycode {
         // Letters
@@ -777,11 +799,11 @@ pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
         KeyCode::KC_LCTL => Key::KEY_LEFTCTRL,
         KeyCode::KC_LSFT => Key::KEY_LEFTSHIFT,
         KeyCode::KC_LALT => Key::KEY_LEFTALT,
-        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA,  // KC_LCMD is alias
+        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA, // KC_LCMD is alias
         KeyCode::KC_RCTL => Key::KEY_RIGHTCTRL,
         KeyCode::KC_RSFT => Key::KEY_RIGHTSHIFT,
         KeyCode::KC_RALT => Key::KEY_RIGHTALT,
-        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA,  // KC_RCMD is alias
+        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA, // KC_RCMD is alias
 
         // Special keys
         KeyCode::KC_ESC => Key::KEY_ESC,

@@ -1,8 +1,7 @@
 use anyhow::{Context, Result};
-use evdev::{Device, InputEvent, Key, AttributeSet, EventType};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
+use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
 use std::os::unix::io::AsRawFd;
-use std::sync::mpsc::Receiver;
 use std::thread;
 use tracing::{debug, error, info, warn};
 
@@ -23,11 +22,18 @@ pub fn start_event_processor(
     mut device: Device,
     keyboard_name: String,
     config: Config,
-    shutdown_rx: Receiver<()>,
-    game_mode_rx: Receiver<bool>,
+    shutdown_rx: crossbeam_channel::Receiver<()>,
+    game_mode_rx: std::sync::mpsc::Receiver<bool>,
 ) -> Result<()> {
     thread::spawn(move || {
-        if let Err(e) = run_event_processor(&keyboard_id, &mut device, &keyboard_name, &config, shutdown_rx, game_mode_rx) {
+        if let Err(e) = run_event_processor(
+            &keyboard_id,
+            &mut device,
+            &keyboard_name,
+            &config,
+            shutdown_rx,
+            game_mode_rx,
+        ) {
             error!("Event processor for {} failed: {}", keyboard_id, e);
         }
         info!("Event processor thread exiting for: {}", keyboard_id);
@@ -41,10 +47,13 @@ fn run_event_processor(
     device: &mut Device,
     keyboard_name: &str,
     config: &Config,
-    shutdown_rx: Receiver<()>,
-    game_mode_rx: Receiver<bool>,
+    shutdown_rx: crossbeam_channel::Receiver<()>,
+    game_mode_rx: std::sync::mpsc::Receiver<bool>,
 ) -> Result<()> {
-    info!("Starting event processor for: {} ({})", keyboard_name, keyboard_id);
+    info!(
+        "Starting event processor for: {} ({})",
+        keyboard_name, keyboard_id
+    );
 
     // Set device to non-blocking mode so we can check shutdown signal
     let fd = device.as_raw_fd();
@@ -77,13 +86,13 @@ fn run_event_processor(
                 info!("Device ungrabbed and released for: {}", keyboard_name);
                 return Ok(());
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 warn!("Shutdown channel disconnected for: {}", keyboard_name);
                 release_all_keys(&mut virtual_device);
                 let _ = device.ungrab();
                 return Ok(());
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {
+            Err(crossbeam_channel::TryRecvError::Empty) => {
                 // No shutdown signal, continue
             }
         }
@@ -91,7 +100,11 @@ fn run_event_processor(
         // Check for game mode toggle (non-blocking)
         match game_mode_rx.try_recv() {
             Ok(active) => {
-                info!("Game mode {} for: {}", if active { "enabled" } else { "disabled" }, keyboard_name);
+                info!(
+                    "Game mode {} for: {}",
+                    if active { "enabled" } else { "disabled" },
+                    keyboard_name
+                );
                 keymap.set_game_mode(active);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -140,20 +153,14 @@ fn run_event_processor(
                                 ProcessResult::TapKeyPressRelease(tap_key) => {
                                     // Emit tap key press and release
                                     let key_evdev = keycode_to_evdev(tap_key);
-                                    let press_event = InputEvent::new_now(
-                                        ev.event_type(),
-                                        key_evdev.code(),
-                                        1,
-                                    );
+                                    let press_event =
+                                        InputEvent::new_now(ev.event_type(), key_evdev.code(), 1);
                                     virtual_device.emit(&[press_event])?;
 
                                     std::thread::sleep(std::time::Duration::from_millis(5));
 
-                                    let release_event = InputEvent::new_now(
-                                        ev.event_type(),
-                                        key_evdev.code(),
-                                        0,
-                                    );
+                                    let release_event =
+                                        InputEvent::new_now(ev.event_type(), key_evdev.code(), 0);
                                     virtual_device.emit(&[release_event])?;
                                 }
                                 ProcessResult::MultipleEvents(events) => {
@@ -184,8 +191,9 @@ fn run_event_processor(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No events available, sleep briefly
-                std::thread::sleep(std::time::Duration::from_millis(1));
+                // No events available - yield to OS scheduler but don't sleep
+                // This prevents CPU spinning while maintaining instant response
+                std::thread::yield_now();
             }
             Err(e) => return Err(e.into()),
         }
@@ -193,10 +201,7 @@ fn run_event_processor(
 }
 
 /// Create a virtual uinput device that mimics the physical keyboard
-fn create_virtual_device(
-    physical_device: &Device,
-    keyboard_name: &str,
-) -> Result<VirtualDevice> {
+fn create_virtual_device(physical_device: &Device, keyboard_name: &str) -> Result<VirtualDevice> {
     let mut keys = AttributeSet::<Key>::new();
 
     // Copy all supported keys from physical device
@@ -208,7 +213,9 @@ fn create_virtual_device(
 
     // Build virtual device
     let virtual_device = VirtualDeviceBuilder::new()?
-        .name(&format!("Keyboard Middleware Virtual Keyboard ({keyboard_name})"))
+        .name(&format!(
+            "Keyboard Middleware Virtual Keyboard ({keyboard_name})"
+        ))
         .with_keys(&keys)?
         .build()?;
 
@@ -221,10 +228,14 @@ fn release_all_keys(virtual_device: &mut VirtualDevice) {
 
     // Release all modifier keys
     let modifiers = [
-        Key::KEY_LEFTCTRL, Key::KEY_RIGHTCTRL,
-        Key::KEY_LEFTSHIFT, Key::KEY_RIGHTSHIFT,
-        Key::KEY_LEFTALT, Key::KEY_RIGHTALT,
-        Key::KEY_LEFTMETA, Key::KEY_RIGHTMETA,
+        Key::KEY_LEFTCTRL,
+        Key::KEY_RIGHTCTRL,
+        Key::KEY_LEFTSHIFT,
+        Key::KEY_RIGHTSHIFT,
+        Key::KEY_LEFTALT,
+        Key::KEY_RIGHTALT,
+        Key::KEY_LEFTMETA,
+        Key::KEY_RIGHTMETA,
     ];
 
     for key in &modifiers {
@@ -248,22 +259,46 @@ fn type_string(virtual_device: &mut VirtualDevice, text: &str, _add_enter: bool)
         if let Some(key) = key {
             // Press shift if needed
             if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+                events.push(InputEvent::new(
+                    EventType::KEY,
+                    Key::KEY_LEFTSHIFT.code(),
+                    1,
+                ));
+                events.push(InputEvent::new(
+                    EventType::SYNCHRONIZATION,
+                    SYN_CODE,
+                    SYN_REPORT,
+                ));
             }
 
             // Press key
             events.push(InputEvent::new(EventType::KEY, key.code(), 1));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            events.push(InputEvent::new(
+                EventType::SYNCHRONIZATION,
+                SYN_CODE,
+                SYN_REPORT,
+            ));
 
             // Release key
             events.push(InputEvent::new(EventType::KEY, key.code(), 0));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+            events.push(InputEvent::new(
+                EventType::SYNCHRONIZATION,
+                SYN_CODE,
+                SYN_REPORT,
+            ));
 
             // Release shift if needed
             if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
+                events.push(InputEvent::new(
+                    EventType::KEY,
+                    Key::KEY_LEFTSHIFT.code(),
+                    0,
+                ));
+                events.push(InputEvent::new(
+                    EventType::SYNCHRONIZATION,
+                    SYN_CODE,
+                    SYN_REPORT,
+                ));
             }
         }
     }

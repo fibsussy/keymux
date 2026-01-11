@@ -6,9 +6,15 @@ use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 
 pub fn run_list() -> Result<()> {
     println!();
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!("  {}", "Detected Keyboards".bright_cyan().bold());
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!();
 
     // Load current config to check enabled keyboards
@@ -20,7 +26,11 @@ pub fn run_list() -> Result<()> {
     let keyboards = find_all_keyboards();
 
     if keyboards.is_empty() {
-        println!("  {} {}", "✗".bright_red().bold(), "No keyboards found!".red());
+        println!(
+            "  {} {}",
+            "✗".bright_red().bold(),
+            "No keyboards found!".red()
+        );
         println!();
         println!("  {}", "Make sure you're in the 'input' group:".dimmed());
         println!("  {}", "sudo usermod -a -G input $USER".dimmed());
@@ -36,7 +46,12 @@ pub fn run_list() -> Result<()> {
         .collect();
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
-    println!("  {}", format!("Found {} keyboard(s):", items.len()).bright_white().bold());
+    println!(
+        "  {}",
+        format!("Found {} keyboard(s):", items.len())
+            .bright_white()
+            .bold()
+    );
     println!();
 
     for (id, name) in &items {
@@ -55,14 +70,30 @@ pub fn run_list() -> Result<()> {
     println!();
 
     // Summary
-    let enabled_count = items.iter().filter(|(id, _)| enabled_set.contains(&id.to_string())).count();
+    let enabled_count = items
+        .iter()
+        .filter(|(id, _)| enabled_set.contains(&id.to_string()))
+        .count();
     let disabled_count = items.len() - enabled_count;
 
     if enabled_count == 0 {
-        println!("  {} {}", "⚠".bright_yellow(), "No keyboards enabled".yellow());
-        println!("  {} Run {} to enable keyboards", "Tip:".bright_yellow().bold(), "keyboard-middleware toggle".bright_white());
+        println!(
+            "  {} {}",
+            "⚠".bright_yellow(),
+            "No keyboards enabled".yellow()
+        );
+        println!(
+            "  {} Run {} to enable keyboards",
+            "Tip:".bright_yellow().bold(),
+            "keyboard-middleware toggle".bright_white()
+        );
     } else {
-        println!("  {} {} enabled, {} disabled", "Status:".bright_white().bold(), enabled_count.to_string().green(), disabled_count.to_string().dimmed());
+        println!(
+            "  {} {} enabled, {} disabled",
+            "Status:".bright_white().bold(),
+            enabled_count.to_string().green(),
+            disabled_count.to_string().dimmed()
+        );
     }
 
     println!();

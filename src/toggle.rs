@@ -3,14 +3,20 @@ use colored::Colorize;
 use dialoguer::MultiSelect;
 
 use crate::config::Config;
-use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 use crate::ipc::{send_request, IpcRequest, IpcResponse};
+use crate::keyboard_id::{find_all_keyboards, KeyboardId};
 
 pub fn run_toggle() -> Result<()> {
     println!();
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!("  {}", "Keyboard Configuration".bright_cyan().bold());
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!();
 
     // Load current config
@@ -21,7 +27,11 @@ pub fn run_toggle() -> Result<()> {
     let keyboards = find_all_keyboards();
 
     if keyboards.is_empty() {
-        println!("  {} {}", "✗".bright_red().bold(), "No keyboards found!".red());
+        println!(
+            "  {} {}",
+            "✗".bright_red().bold(),
+            "No keyboards found!".red()
+        );
         println!();
         return Ok(());
     }
@@ -34,10 +44,7 @@ pub fn run_toggle() -> Result<()> {
     items.sort_by(|a, b| a.1.cmp(&b.1));
 
     // Get current enabled keyboards set
-    let enabled_set: Vec<String> = config
-        .enabled_keyboards
-        .clone()
-        .unwrap_or_default();
+    let enabled_set: Vec<String> = config.enabled_keyboards.clone().unwrap_or_default();
 
     // Show current status
     println!("  {}", "Current Status:".bright_white().bold());
@@ -75,10 +82,7 @@ pub fn run_toggle() -> Result<()> {
     println!();
 
     // Build simple display items (dialoguer will add styling)
-    let display_items: Vec<String> = items
-        .iter()
-        .map(|(_id, name)| name.clone())
-        .collect();
+    let display_items: Vec<String> = items.iter().map(|(_id, name)| name.clone()).collect();
 
     // Determine which items are pre-selected (currently enabled)
     let defaults: Vec<bool> = items
@@ -91,8 +95,8 @@ pub fn run_toggle() -> Result<()> {
     println!();
 
     // Show multi-select dialog with custom theme
-    use dialoguer::theme::ColorfulTheme;
     use console::Style;
+    use dialoguer::theme::ColorfulTheme;
 
     let theme = ColorfulTheme {
         checked_item_prefix: Style::new().green().apply_to("✓".to_string()),
@@ -109,10 +113,8 @@ pub fn run_toggle() -> Result<()> {
         .interact()?;
 
     // Update config with selected keyboards
-    let enabled_keyboards: Vec<String> = selections
-        .iter()
-        .map(|&i| items[i].0.to_string())
-        .collect();
+    let enabled_keyboards: Vec<String> =
+        selections.iter().map(|&i| items[i].0.to_string()).collect();
 
     config.enabled_keyboards = Some(enabled_keyboards.clone());
 
@@ -125,20 +127,40 @@ pub fn run_toggle() -> Result<()> {
             // Daemon hot-reloaded successfully
         }
         Ok(_) => {
-            println!("  {} {}", "⚠".bright_yellow(), "Unexpected response from daemon".yellow());
+            println!(
+                "  {} {}",
+                "⚠".bright_yellow(),
+                "Unexpected response from daemon".yellow()
+            );
         }
         Err(e) => {
-            println!("  {} {}", "⚠".bright_yellow(), format!("Daemon not running: {e}").yellow());
-            println!("  {} Start it with: {}", "Tip:".bright_yellow().bold(), "sudo systemctl start keyboard-middleware".dimmed());
+            println!(
+                "  {} {}",
+                "⚠".bright_yellow(),
+                format!("Daemon not running: {e}").yellow()
+            );
+            println!(
+                "  {} Start it with: {}",
+                "Tip:".bright_yellow().bold(),
+                "sudo systemctl start keyboard-middleware".dimmed()
+            );
         }
     }
 
     println!();
-    println!("  {} {}", "✓".bright_green().bold(), "Configuration saved!".green());
+    println!(
+        "  {} {}",
+        "✓".bright_green().bold(),
+        "Configuration saved!".green()
+    );
     println!();
 
     if enabled_keyboards.is_empty() {
-        println!("  {} {}", "⚠".bright_yellow(), "No keyboards enabled".yellow());
+        println!(
+            "  {} {}",
+            "⚠".bright_yellow(),
+            "No keyboards enabled".yellow()
+        );
     } else {
         println!("  {}", "Enabled keyboards:".bright_white());
         for id in &enabled_keyboards {

@@ -1,14 +1,16 @@
 [Unit]
-Description=Keyboard Middleware Root Daemon
+Description=Keyboard Middleware Async Root Daemon
 Documentation=https://github.com/fibsussy/keyboard-middleware
 After=local-fs.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/keyboard-middleware daemon
-Restart=on-failure
+Restart=always
 RestartSec=5
 Environment="RUST_LOG=info"
+# Async runtime benefits from multiple threads
+Environment="TOKIO_WORKER_THREADS=4"
 
 # Capabilities needed for input device access
 CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_SYS_RAWIO CAP_SETUID CAP_SETGID

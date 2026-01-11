@@ -28,8 +28,12 @@ impl std::fmt::Debug for LogicalKeyboard {
     }
 }
 
-
 impl KeyboardId {
+    /// Create a new KeyboardId from a string
+    pub const fn new(id: String) -> Self {
+        Self(id)
+    }
+
     /// Create a simplified hardware ID from an evdev device
     /// Format: vendor:product:version:bustype
     pub fn from_device(device: &Device) -> Self {
@@ -81,7 +85,8 @@ fn get_input_number(path: &Path) -> Option<u32> {
 /// Find all keyboard devices and return them grouped by hardware ID
 /// Each logical keyboard may have multiple event devices (input0, input1, etc.)
 pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
-    let mut device_groups: HashMap<KeyboardId, Vec<(PathBuf, Device, String, u32)>> = HashMap::new();
+    let mut device_groups: HashMap<KeyboardId, Vec<(PathBuf, Device, String, u32)>> =
+        HashMap::new();
 
     for (path, device) in evdev::enumerate() {
         // Check if it has keyboard keys
@@ -134,7 +139,10 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
                     input_num
                 );
 
-                device_groups.entry(id).or_default().push((path, device, name, input_num));
+                device_groups
+                    .entry(id)
+                    .or_default()
+                    .push((path, device, name, input_num));
             }
         }
     }
@@ -160,7 +168,10 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
         let logical_kb = LogicalKeyboard {
             id: id.clone(),
             name,
-            devices: devices.into_iter().map(|(path, dev, _, _)| (path, dev)).collect(),
+            devices: devices
+                .into_iter()
+                .map(|(path, dev, _, _)| (path, dev))
+                .collect(),
         };
 
         keyboards.insert(id, logical_kb);

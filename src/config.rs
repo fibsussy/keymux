@@ -6,27 +6,96 @@ use std::collections::HashMap;
 #[allow(non_camel_case_types)]
 pub enum KeyCode {
     // Letters
-    KC_A, KC_B, KC_C, KC_D, KC_E, KC_F, KC_G, KC_H, KC_I, KC_J, KC_K, KC_L, KC_M,
-    KC_N, KC_O, KC_P, KC_Q, KC_R, KC_S, KC_T, KC_U, KC_V, KC_W, KC_X, KC_Y, KC_Z,
+    KC_A,
+    KC_B,
+    KC_C,
+    KC_D,
+    KC_E,
+    KC_F,
+    KC_G,
+    KC_H,
+    KC_I,
+    KC_J,
+    KC_K,
+    KC_L,
+    KC_M,
+    KC_N,
+    KC_O,
+    KC_P,
+    KC_Q,
+    KC_R,
+    KC_S,
+    KC_T,
+    KC_U,
+    KC_V,
+    KC_W,
+    KC_X,
+    KC_Y,
+    KC_Z,
 
     // Numbers
-    KC_1, KC_2, KC_3, KC_4, KC_5, KC_6, KC_7, KC_8, KC_9, KC_0,
+    KC_1,
+    KC_2,
+    KC_3,
+    KC_4,
+    KC_5,
+    KC_6,
+    KC_7,
+    KC_8,
+    KC_9,
+    KC_0,
 
     // Modifiers
-    KC_LCTL, KC_LSFT, KC_LALT, KC_LGUI, KC_LCMD,  // KC_LCMD is alias for KC_LGUI
-    KC_RCTL, KC_RSFT, KC_RALT, KC_RGUI, KC_RCMD,  // KC_RCMD is alias for KC_RGUI
+    KC_LCTL,
+    KC_LSFT,
+    KC_LALT,
+    KC_LGUI,
+    KC_LCMD, // KC_LCMD is alias for KC_LGUI
+    KC_RCTL,
+    KC_RSFT,
+    KC_RALT,
+    KC_RGUI,
+    KC_RCMD, // KC_RCMD is alias for KC_RGUI
 
     // Special keys
-    KC_ESC, KC_CAPS, KC_TAB, KC_SPC, KC_ENT, KC_BSPC, KC_DEL,
-    KC_GRV, KC_MINS, KC_EQL, KC_LBRC, KC_RBRC, KC_BSLS,
-    KC_SCLN, KC_QUOT, KC_COMM, KC_DOT, KC_SLSH,
+    KC_ESC,
+    KC_CAPS,
+    KC_TAB,
+    KC_SPC,
+    KC_ENT,
+    KC_BSPC,
+    KC_DEL,
+    KC_GRV,
+    KC_MINS,
+    KC_EQL,
+    KC_LBRC,
+    KC_RBRC,
+    KC_BSLS,
+    KC_SCLN,
+    KC_QUOT,
+    KC_COMM,
+    KC_DOT,
+    KC_SLSH,
 
     // Arrow keys
-    KC_LEFT, KC_DOWN, KC_UP, KC_RGHT,
+    KC_LEFT,
+    KC_DOWN,
+    KC_UP,
+    KC_RGHT,
 
     // Function keys
-    KC_F1, KC_F2, KC_F3, KC_F4, KC_F5, KC_F6,
-    KC_F7, KC_F8, KC_F9, KC_F10, KC_F11, KC_F12,
+    KC_F1,
+    KC_F2,
+    KC_F3,
+    KC_F4,
+    KC_F5,
+    KC_F6,
+    KC_F7,
+    KC_F8,
+    KC_F9,
+    KC_F10,
+    KC_F11,
+    KC_F12,
 }
 
 /// Layer identifier - supports unlimited layers
@@ -66,7 +135,6 @@ pub enum DetectionMethod {
     ProcessTreeWalk,
 }
 
-
 /// Layer configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayerConfig {
@@ -80,12 +148,12 @@ pub struct GameMode {
 }
 
 impl GameMode {
-    #[must_use] 
+    #[must_use]
     pub const fn auto_detect_enabled() -> bool {
         true
     }
 
-    #[must_use] 
+    #[must_use]
     pub fn detection_methods() -> Vec<DetectionMethod> {
         vec![
             DetectionMethod::GamescopeAppId,
@@ -95,7 +163,7 @@ impl GameMode {
         ]
     }
 
-    #[must_use] 
+    #[must_use]
     pub const fn process_tree_depth() -> u32 {
         10
     }
@@ -148,8 +216,8 @@ impl Passwords {
     /// Get default password file path
     #[allow(clippy::missing_errors_doc)]
     pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
+        let config_dir =
+            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
         Ok(config_dir.join("keyboard-middleware").join("password.txt"))
     }
 }
@@ -187,13 +255,13 @@ impl Config {
     /// Get default config path
     #[allow(clippy::missing_errors_doc)]
     pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
+        let config_dir =
+            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
         Ok(config_dir.join("keyboard-middleware").join("config.ron"))
     }
 
     /// Get effective config for a specific keyboard
-    #[must_use] 
+    #[must_use]
     pub fn for_keyboard(&self, keyboard_id: &str) -> Self {
         let mut config = self.clone();
 

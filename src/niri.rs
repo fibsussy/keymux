@@ -16,7 +16,10 @@ fn detect_niri_socket() -> Option<PathBuf> {
             info!("Using NIRI_SOCKET from env: {}", socket_path);
             return Some(path);
         }
-        warn!("NIRI_SOCKET env var set but file doesn't exist: {}", socket_path);
+        warn!(
+            "NIRI_SOCKET env var set but file doesn't exist: {}",
+            socket_path
+        );
     }
 
     // Fallback: scan /run/user/{uid}/niri.*
@@ -40,7 +43,7 @@ fn detect_niri_socket() -> Option<PathBuf> {
 }
 
 /// Check if Niri is available
-#[must_use] 
+#[must_use]
 pub fn is_niri_available() -> bool {
     detect_niri_socket().is_some()
 }
@@ -60,16 +63,26 @@ pub enum NiriEvent {
 fn get_focused_window_info() -> WindowInfo {
     let Ok(output) = Command::new("niri")
         .args(["msg", "focused-window"])
-        .output() else {
-            return WindowInfo { app_id: None, pid: None };
+        .output()
+    else {
+        return WindowInfo {
+            app_id: None,
+            pid: None,
         };
+    };
 
     if !output.status.success() {
-        return WindowInfo { app_id: None, pid: None };
+        return WindowInfo {
+            app_id: None,
+            pid: None,
+        };
     }
 
     let Ok(text) = String::from_utf8(output.stdout) else {
-        return WindowInfo { app_id: None, pid: None };
+        return WindowInfo {
+            app_id: None,
+            pid: None,
+        };
     };
 
     let mut app_id = None;
@@ -98,7 +111,9 @@ fn get_focused_window_info() -> WindowInfo {
 /// Returns immediately after spawning the monitor thread
 pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
     // Detect socket before spawning thread
-    let socket_path = if let Some(path) = detect_niri_socket() { path } else {
+    let socket_path = if let Some(path) = detect_niri_socket() {
+        path
+    } else {
         error!("Cannot start niri monitor: no socket found");
         return;
     };
@@ -140,7 +155,10 @@ pub fn start_niri_monitor(tx: Sender<NiriEvent>) {
                         if line.starts_with("Window focus changed:") {
                             let window_info = get_focused_window_info();
                             if let Some(ref app) = window_info.app_id {
-                                info!("Focus changed → app_id: {}, pid: {:?}", app, window_info.pid);
+                                info!(
+                                    "Focus changed → app_id: {}, pid: {:?}",
+                                    app, window_info.pid
+                                );
                             }
                             if tx.send(NiriEvent::WindowFocusChanged(window_info)).is_err() {
                                 error!("Niri monitor: channel closed, exiting");
@@ -202,18 +220,16 @@ fn check_process_tree(process_id: u32) -> (bool, bool) {
 
         // Get parent PID
         let stat_path = format!("/proc/{current_pid}/stat");
-        let parent_pid = fs::read_to_string(&stat_path)
-            .ok()
-            .and_then(|stat| {
-                // stat format: pid (comm) state ppid ...
-                // Find the last ')' to handle process names with spaces/parens
-                let parts: Vec<&str> = stat.rsplitn(2, ')').collect();
-                if parts.len() == 2 {
-                    parts[0].split_whitespace().nth(1)?.parse::<u32>().ok()
-                } else {
-                    None
-                }
-            });
+        let parent_pid = fs::read_to_string(&stat_path).ok().and_then(|stat| {
+            // stat format: pid (comm) state ppid ...
+            // Find the last ')' to handle process names with spaces/parens
+            let parts: Vec<&str> = stat.rsplitn(2, ')').collect();
+            if parts.len() == 2 {
+                parts[0].split_whitespace().nth(1)?.parse::<u32>().ok()
+            } else {
+                None
+            }
+        });
 
         match parent_pid {
             Some(parent) if parent > 1 => current_pid = parent,
@@ -230,7 +246,7 @@ fn check_process_tree(process_id: u32) -> (bool, bool) {
 /// 2. App ID starts with "`steam_app`_" (Steam games)
 /// 3. Process has `IS_GAME=1` environment variable
 /// 4. Process is running through gamescope, gamemode, or custom-gamescope
-#[must_use] 
+#[must_use]
 pub fn should_enable_gamemode(window_info: &WindowInfo) -> bool {
     // Check app ID first (fastest check)
     if window_info.app_id.as_deref() == Some("gamescope") {
@@ -245,9 +261,7 @@ pub fn should_enable_gamemode(window_info: &WindowInfo) -> bool {
     }
 
     // Check for specific gaming applications
-    const GAME_APP_IDS: &[&str] = &[
-        "org.vinegarhq.Sober",
-    ];
+    const GAME_APP_IDS: &[&str] = &["org.vinegarhq.Sober"];
 
     if let Some(app_id) = &window_info.app_id {
         if GAME_APP_IDS.contains(&app_id.as_str()) {

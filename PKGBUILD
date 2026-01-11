@@ -7,8 +7,9 @@ pkgdesc="QMK-inspired keyboard middleware with home row mods, layers, SOCD, and 
 arch=('x86_64' 'aarch64')
 url="https://github.com/fibsussy/keyboard-middleware"
 license=('MIT')
-depends=('systemd')
+depends=('systemd' 'udev')
 makedepends=('rust' 'cargo')
+optdepends=('niri: automatic game mode detection in Niri compositor')
 options=('!debug')
 install=$pkgname.install
 

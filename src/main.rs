@@ -4,17 +4,20 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
-mod daemon;
-mod keyboard_id;
 pub mod config;
-pub mod niri;
-mod toggle;
-mod list;
+mod config_manager;
+mod daemon;
+mod debug;
 mod event_processor;
-mod keymap;
 mod ipc;
+mod keyboard_id;
+mod keymap;
+mod list;
+pub mod niri;
+mod session_manager;
+mod toggle;
 
-use daemon::Daemon;
+use daemon::AsyncDaemon;
 
 #[derive(Parser)]
 #[command(name = "keyboard-middleware")]
@@ -52,6 +55,9 @@ enum Commands {
     /// Set or update the password for typing
     SetPassword,
 
+    /// Show debugging information
+    Debug,
+
     /// Generate shell completions
     Completion {
         /// Shell to generate completions for
@@ -72,8 +78,15 @@ fn main() -> Result<()> {
                 .with_file(false)
                 .init();
 
-            let mut daemon = Daemon::new(config.clone(), user.clone())?;
-            daemon.run()?;
+            // Use the new async daemon architecture
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?;
+
+            runtime.block_on(async {
+                let mut daemon = AsyncDaemon::new(config.clone(), user.clone())?;
+                daemon.run().await
+            })?;
         }
         Some(Commands::NiriDaemon) => {
             run_niri_daemon()?;
@@ -86,6 +99,9 @@ fn main() -> Result<()> {
         }
         Some(Commands::SetPassword) => {
             set_password()?;
+        }
+        Some(Commands::Debug) => {
+            debug::run_debug()?;
         }
         Some(Commands::Completion { shell }) => {
             generate_completion(*shell);
@@ -104,23 +120,67 @@ fn print_help() {
     println!("{}", "QMK-inspired keyboard remapping for Linux".dimmed());
     println!();
     println!("{}", "USAGE:".bright_yellow().bold());
-    println!("  {} {}", "keyboard-middleware".bright_white(), "[COMMAND]".dimmed());
+    println!(
+        "  {} {}",
+        "keyboard-middleware".bright_white(),
+        "[COMMAND]".dimmed()
+    );
     println!();
     println!("{}", "COMMANDS:".bright_yellow().bold());
-    println!("  {}  {}", "daemon".bright_green().bold(), "Run the keyboard middleware daemon".dimmed());
-    println!("  {}    {}", "list".bright_green().bold(), "List all detected keyboards".dimmed());
-    println!("  {}  {}", "toggle".bright_green().bold(), "Toggle keyboard enable/disable state".dimmed());
-    println!("  {}  {}", "set-password".bright_green().bold(), "Set or update the password for typing".dimmed());
-    println!("  {}    {}", "help".bright_green().bold(), "Print this message".dimmed());
+    println!(
+        "  {}  {}",
+        "daemon".bright_green().bold(),
+        "Run the keyboard middleware daemon".dimmed()
+    );
+    println!(
+        "  {}    {}",
+        "list".bright_green().bold(),
+        "List all detected keyboards".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "toggle".bright_green().bold(),
+        "Toggle keyboard enable/disable state".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "set-password".bright_green().bold(),
+        "Set or update the password for typing".dimmed()
+    );
+    println!(
+        "  {}    {}",
+        "help".bright_green().bold(),
+        "Print this message".dimmed()
+    );
     println!();
     println!("{}", "OPTIONS:".bright_yellow().bold());
-    println!("  {}  {}", "-h, --help".bright_white(), "Print help".dimmed());
-    println!("  {}  {}", "-V, --version".bright_white(), "Print version".dimmed());
+    println!(
+        "  {}  {}",
+        "-h, --help".bright_white(),
+        "Print help".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "-V, --version".bright_white(),
+        "Print version".dimmed()
+    );
     println!();
     println!("{}", "EXAMPLES:".bright_yellow().bold());
-    println!("  {}  {}", "keyboard-middleware daemon".bright_white(), "Start the daemon".dimmed());
-    println!("  {}    {}", "keyboard-middleware list".bright_white(), "Show all detected keyboards".dimmed());
-    println!("  {}  {}", "keyboard-middleware toggle".bright_white(), "Select keyboards to enable/disable".dimmed());
+    println!(
+        "  {}  {}",
+        "keyboard-middleware daemon".bright_white(),
+        "Start the daemon".dimmed()
+    );
+    println!(
+        "  {}    {}",
+        "keyboard-middleware list".bright_white(),
+        "Show all detected keyboards".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "keyboard-middleware toggle".bright_white(),
+        "Select keyboards to enable/disable".dimmed()
+    );
     println!();
 }
 
@@ -135,16 +195,28 @@ fn generate_completion(shell: clap_complete::Shell) {
 }
 
 fn set_password() -> Result<()> {
-    use dialoguer::{Password, Confirm};
     use config::Passwords;
+    use dialoguer::{Confirm, Password};
 
     println!();
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!("  {}", "Password Configuration".bright_cyan().bold());
-    println!("{}", "═══════════════════════════════════════".bright_cyan());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
     println!();
-    println!("{}", "  Set a password that can be typed with a dedicated key.".dimmed());
-    println!("{}", "  Configure the key in your config.ron file using Action::Password".dimmed());
+    println!(
+        "{}",
+        "  Set a password that can be typed with a dedicated key.".dimmed()
+    );
+    println!(
+        "{}",
+        "  Configure the key in your config.ron file using Action::Password".dimmed()
+    );
     println!();
 
     // Get password file path
@@ -153,7 +225,11 @@ fn set_password() -> Result<()> {
     // Show current password state
     let current_password = Passwords::load(&password_path)?;
     if current_password.is_some() {
-        println!("  {} {}", "Current:".bright_yellow(), "Password is set".green());
+        println!(
+            "  {} {}",
+            "Current:".bright_yellow(),
+            "Password is set".green()
+        );
         println!();
 
         let clear = Confirm::new()
@@ -166,12 +242,20 @@ fn set_password() -> Result<()> {
                 std::fs::remove_file(&password_path)?;
             }
             println!();
-            println!("  {} {}", "✓".bright_green().bold(), "Password cleared".green());
+            println!(
+                "  {} {}",
+                "✓".bright_green().bold(),
+                "Password cleared".green()
+            );
             println!();
             return Ok(());
         }
     } else {
-        println!("  {} {}", "Current:".bright_yellow(), "No password set".dimmed());
+        println!(
+            "  {} {}",
+            "Current:".bright_yellow(),
+            "No password set".dimmed()
+        );
         println!();
     }
 
@@ -183,7 +267,11 @@ fn set_password() -> Result<()> {
 
     if password.is_empty() {
         println!();
-        println!("  {} {}", "✗".bright_red().bold(), "Password cannot be empty".red());
+        println!(
+            "  {} {}",
+            "✗".bright_red().bold(),
+            "Password cannot be empty".red()
+        );
         println!();
         return Ok(());
     }
@@ -197,9 +285,16 @@ fn set_password() -> Result<()> {
     std::fs::write(&password_path, password)?;
 
     println!();
-    println!("  {} {}", "✓".bright_green().bold(), "Password saved successfully!".green());
+    println!(
+        "  {} {}",
+        "✓".bright_green().bold(),
+        "Password saved successfully!".green()
+    );
     println!();
-    println!("  {} Edit your config.ron to assign a key to Action::Password", "Tip:".bright_yellow().bold());
+    println!(
+        "  {} Edit your config.ron to assign a key to Action::Password",
+        "Tip:".bright_yellow().bold()
+    );
     println!();
 
     Ok(())
@@ -256,7 +351,10 @@ fn run_niri_daemon() -> Result<()> {
                 // Only send IPC if state changed
                 if should_enable != current_game_mode {
                     current_game_mode = should_enable;
-                    info!("Game mode state changed: {}", if should_enable { "ENABLED" } else { "DISABLED" });
+                    info!(
+                        "Game mode state changed: {}",
+                        if should_enable { "ENABLED" } else { "DISABLED" }
+                    );
 
                     // Send IPC request to root daemon
                     match ipc::send_request(&ipc::IpcRequest::SetGameMode(should_enable)) {

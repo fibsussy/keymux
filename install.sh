@@ -42,8 +42,17 @@ if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ]; then
     else
         TMP_DIR=$(mktemp -d)
         trap 'rm -rf "$TMP_DIR"' EXIT
+        echo "Copying source files to temporary directory..."
         cd "$START_DIR"
-        git ls-files -z | xargs -0 tar cf - | (cd "$TMP_DIR" && tar xf -)
+        
+        # Get tracked files that exist, plus untracked but trackable files
+        {
+            git ls-files --cached --exclude-standard | while IFS= read -r file; do
+                [ -e "$file" ] && echo "$file"
+            done
+            git ls-files --others --exclude-standard
+        } | tar -czf - -T - | (cd "$TMP_DIR" && tar xzf -)
+        
         cd "$TMP_DIR"
         echo "Building package as normal user..."
         makepkg

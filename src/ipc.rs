@@ -78,8 +78,8 @@ pub fn get_socket_path() -> PathBuf {
 /// Send an IPC request and receive response
 pub fn send_request(request: &IpcRequest) -> Result<IpcResponse> {
     let socket_path = get_socket_path();
-    let mut stream = UnixStream::connect(&socket_path)
-        .context("Failed to connect to daemon. Is it running?")?;
+    let mut stream =
+        UnixStream::connect(&socket_path).context("Failed to connect to daemon. Is it running?")?;
 
     // Serialize and send request
     let encoded = bincode::serialize(request)?;
