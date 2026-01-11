@@ -6,7 +6,7 @@
 
 ### Core Functionality
 - **Home Row Mods (HRM)**: Tap for letters, hold for modifiers with configurable tapping term
-- **OVERLOAD Actions**: Simpler tap/hold without permissive hold logic
+- **OVERLOAD Actions**: Tap/hold with permissive hold and double-tap support
 - **Custom Layers**: Define unlimited layers (navigation, numpad, symbols, etc.)
 - **Game Mode**: Automatic detection via Steam/Gamescope with SOCD support
 - **SOCD Cleaner**: Last-input-priority for FPS games (eliminates W+S conflicts)
@@ -27,58 +27,6 @@
 - **IPC Architecture**: Manage keyboards without restarting daemon
 - **RON Configuration**: Human-readable config with extensive comments
 
-## 📊 Comparison with kmonad
-
-| Feature | keyboard-middleware | kmonad | Winner |
-|---------|-------------------|--------|--------|
-| **Performance** | Native Rust, zero-copy evdev | Haskell runtime | ⚡ keyboard-middleware |
-| **Input Latency** | <1ms (direct evdev) | ~2-3ms | ⚡ keyboard-middleware |
-| **Memory Usage** | ~2-5MB per keyboard | ~50-80MB | ⚡ keyboard-middleware |
-| **Hot-Reload** | Automatic on file save | Manual restart required | ⚡ keyboard-middleware |
-| **Multi-Keyboard** | Native support | Single keyboard focus | ⚡ keyboard-middleware |
-| **Config Format** | RON (Rust Object Notation) | Custom S-expressions | 🤝 Preference |
-| **Layer System** | QMK-style enum layers | S-expression layers | 🤝 Preference |
-| **Home Row Mods** | Permissive hold + OVERLOAD | Tap-hold with delays | ⚡ keyboard-middleware |
-| **Game Mode** | Automatic Steam/Gamescope detection | Manual toggle | ⚡ keyboard-middleware |
-| **SOCD** | Built-in last-input-priority | Not available | ⚡ keyboard-middleware |
-| **Command Runner** | Execute shell commands on keypress | Not available | ⚡ keyboard-middleware |
-| **Per-Key Timing** | Per-action timing possible | Global timing | ⚡ keyboard-middleware |
-| **Shell Completions** | Built-in (bash/zsh/fish) | Manual setup | ⚡ keyboard-middleware |
-| **Community** | New project | Mature, large community | ✨ kmonad |
-| **Documentation** | Growing | Extensive | ✨ kmonad |
-| **Cross-Platform** | Linux only | Linux, Windows, macOS | ✨ kmonad |
-| **Established** | New (2025) | Mature (2018+) | ✨ kmonad |
-
-### Why keyboard-middleware?
-
-**Performance-Critical Users:**
-- Gamers who need zero input lag and SOCD
-- Vim users who need instant mode switches
-- Anyone who types fast and values responsiveness
-
-**QMK Users:**
-- If you're familiar with QMK's Action system, this will feel natural
-- Enum-based layers instead of symbolic expressions
-- Direct action mappings like `HR(KC_A, KC_LGUI)`
-
-**Multi-Keyboard Setups:**
-- Different configs for laptop keyboard vs external keyboard
-- Automatic keyboard detection and config switching
-- Enable/disable keyboards without daemon restart
-
-**Convenience Features:**
-- Auto hot-reload (edit config, save, done)
-- Automatic game mode detection
-- Desktop notifications for config errors
-- Shell command execution on key press
-
-### Why kmonad?
-
-- You need cross-platform support (Windows, macOS)
-- You prefer S-expression configuration
-- You value a mature, battle-tested codebase
-- You need features specific to kmonad's ecosystem
-
 ## 🔧 Installation
 
 ### One-Line Install (Arch Linux)
@@ -95,8 +43,6 @@ curl -fsSL https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/i
 
 **Note:** For security, inspect the install script before running it. View it [here](https://github.com/fibsussy/keyboard-middleware/blob/main/install.sh).
 
-**Local development:** When run from within the cloned repo, `./install.sh` defaults to building from source. Use `./install.sh bin` for precompiled binary.
-
 ### Manual Installation
 
 #### Prerequisites
@@ -105,26 +51,6 @@ Add yourself to the `input` group:
 ```bash
 sudo usermod -a -G input $USER
 # Log out and log back in for changes to take effect
-```
-
-#### From Precompiled Binary (Recommended)
-
-```bash
-# Download latest release
-VERSION="0.1.0"  # Check https://github.com/fibsussy/keyboard-middleware/releases/latest
-ARCH="x86_64"    # or "aarch64"
-curl -fsSL -O "https://github.com/fibsussy/keyboard-middleware/releases/download/v${VERSION}/keyboard-middleware-linux-${ARCH}.tar.gz"
-
-# Extract and install
-tar -xzf keyboard-middleware-linux-${ARCH}.tar.gz
-sudo install -Dm755 keyboard-middleware /usr/bin/keyboard-middleware
-
-# Install systemd service
-sudo curl -fsSL -o /usr/lib/systemd/user/keyboard-middleware.service \
-    "https://raw.githubusercontent.com/fibsussy/keyboard-middleware/main/keyboard-middleware.service"
-
-# Enable and start
-systemctl --user enable --now keyboard-middleware
 ```
 
 #### From Source
@@ -137,22 +63,12 @@ cargo build --release
 
 # Install
 sudo cp target/release/keyboard-middleware /usr/bin/
-sudo cp keyboard-middleware.service /usr/lib/systemd/user/
+sudo cp keyboard-middleware.service /usr/lib/systemd/system/
+sudo cp keyboard-middleware-niri.service /usr/lib/systemd/user/
+sudo cp config.example.ron /usr/share/doc/keyboard-middleware/
 
-# Enable and start
-systemctl --user enable --now keyboard-middleware
-```
-
-#### Using PKGBUILD (Arch Linux)
-
-```bash
-# Clone and build from source
-git clone https://github.com/fibsussy/keyboard-middleware.git
-cd keyboard-middleware
-makepkg -si              # Build from source
-
-# Or use precompiled binary
-makepkg -si -p PKGBUILD.bin
+# Enable and start root daemon
+sudo systemctl enable --now keyboard-middleware.service
 ```
 
 ### Post-Installation Setup
@@ -161,11 +77,9 @@ makepkg -si -p PKGBUILD.bin
 ```bash
 mkdir -p ~/.config/keyboard-middleware
 cp /usr/share/doc/keyboard-middleware/config.example.ron ~/.config/keyboard-middleware/config.ron
-# Or from source:
-cp config.example.ron ~/.config/keyboard-middleware/config.ron
 ```
 
-2. **Edit the config:**
+2. **Edit your config:**
 ```bash
 $EDITOR ~/.config/keyboard-middleware/config.ron
 ```
@@ -175,17 +89,20 @@ $EDITOR ~/.config/keyboard-middleware/config.ron
 keyboard-middleware toggle
 ```
 
-4. **(Optional) Shell completions:**
+4. **(Optional) Enable Niri watcher for automatic game mode:**
 ```bash
-# Bash
-keyboard-middleware completion bash | sudo tee /usr/share/bash-completion/completions/keyboard-middleware
-
-# Zsh
-keyboard-middleware completion zsh | sudo tee /usr/share/zsh/site-functions/_keyboard-middleware
-
-# Fish
-keyboard-middleware completion fish > ~/.config/fish/completions/keyboard-middleware.fish
+systemctl --user enable --now keyboard-middleware-niri.service
 ```
+
+### Systemd Services
+
+**Root daemon (required):** Manages keyboard devices
+- Path: `/usr/lib/systemd/system/keyboard-middleware.service`
+- Enable: `sudo systemctl enable --now keyboard-middleware.service`
+
+**User service (optional):** Watches Niri windows for automatic game mode
+- Path: `/usr/lib/systemd/user/keyboard-middleware-niri.service`
+- Enable: `systemctl --user enable --now keyboard-middleware-niri.service`
 
 ## 📖 Configuration Guide
 
@@ -209,12 +126,12 @@ keyboard-middleware completion fish > ~/.config/fish/completions/keyboard-middle
 
 ### Available Key Codes
 
-Letters: `KC_A` through `KC_Z`
-Numbers: `KC_1` through `KC_0`
-Modifiers: `KC_LCTL`, `KC_LSFT`, `KC_LALT`, `KC_LGUI`, `KC_RCTL`, `KC_RSFT`, `KC_RALT`, `KC_RGUI`
-Special: `KC_ESC`, `KC_CAPS`, `KC_TAB`, `KC_SPC`, `KC_ENT`, `KC_BSPC`, `KC_DEL`
-Function: `KC_F1` through `KC_F12`
-Arrows: `KC_LEFT`, `KC_DOWN`, `KC_UP`, `KC_RGHT`
+**Letters:** `KC_A` through `KC_Z`
+**Numbers:** `KC_1` through `KC_0`
+**Modifiers:** `KC_LCTL`, `KC_LSFT`, `KC_LALT`, `KC_LGUI`, `KC_RCTL`, `KC_RSFT`, `KC_RALT`, `KC_RGUI`
+**Special:** `KC_ESC`, `KC_CAPS`, `KC_TAB`, `KC_SPC`, `KC_ENT`, `KC_BSPC`, `KC_DEL`
+**Function:** `KC_F1` through `KC_F12`
+**Arrows:** `KC_LEFT`, `KC_DOWN`, `KC_UP`, `KC_RGHT`
 
 ### Available Actions
 
@@ -227,20 +144,30 @@ KC_CAPS: Key(KC_ESC),  // Caps Lock becomes Escape
 #### HR(tap_key, hold_key)
 Home row mod with permissive hold logic.
 ```ron
-KC_A: HR(KC_A, KC_LGUI),  // Tap for 'a', hold for Super/Win/Cmd
-KC_S: HR(KC_S, KC_LALT),   // Tap for 's', hold for Alt
+KC_A: HR(KC_A, KC_LGUI),  // A = tap 'a', hold for Super/Win/Cmd
+KC_S: HR(KC_S, KC_LALT),   // S = tap 's', hold for Alt
 ```
 
 #### OVERLOAD(tap_key, hold_key)
-Simpler tap/hold without permissive hold.
+Tap/hold with permissive hold and optional double-tap mode.
+- **Tap**: Emits tap_key (base key)
+- **Hold**: Emits hold_key (modifier)
+- **Permissive Hold**: Pressing another key while pending resolves to hold
+- **Double-Tap** (if `double_tap_window_ms` set): Press twice to hold tap_key instead of hold_key
+
 ```ron
 KC_SPC: OVERLOAD(KC_SPC, KC_LCTL),  // Tap for Space, hold for Ctrl
+
+# With double-tap enabled:
+# Press Space = tap Space
+# Hold Space = hold Ctrl (with permissive hold)
+# Double-tap Space = hold Space (base key)
 ```
 
 #### TO(Layer)
 Switch to a different layer while held.
 ```ron
-KC_LALT: TO(L_NAV),  // Hold Left Alt to activate navigation layer
+KC_LALT: TO("nav"),  // Hold Left Alt to activate navigation layer
 ```
 
 #### Socd(key1, key2)
@@ -297,13 +224,13 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
     tapping_term_ms: 130,
     double_tap_window_ms: Some(300),
     enabled_keyboards: Some([
-        "2e3c:c365:0110:0003:usb-0000:08:00.3-1/input0",
+        "2e3c:c365:0110:0003",
     ]),
 
     remaps: {
         KC_CAPS: Key(KC_ESC),
         KC_ESC: Key(KC_GRV),
-        KC_LALT: TO(L_NAV),
+        KC_LALT: TO("nav"),
 
         KC_A: HR(KC_A, KC_LGUI),
         KC_S: HR(KC_S, KC_LALT),
@@ -329,21 +256,16 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
                 KC_J: Key(KC_DOWN),
                 KC_K: Key(KC_UP),
                 KC_L: Key(KC_RGHT),
-
-                // Command runner
-                KC_BSPC: CMD("/usr/bin/notify-send 'Nav layer active'"),
             },
         ),
     },
 
     game_mode: (
         remaps: {
-            // Disable home row mods for left hand (WASD gaming)
-            // Keep essential remaps
             KC_CAPS: Key(KC_ESC),
             KC_ESC: Key(KC_GRV),
 
-            // SOCD for competitive FPS
+            // SOCD for FPS gaming
             KC_W: Socd(KC_W, KC_S),
             KC_S: Socd(KC_S, KC_W),
             KC_A: Socd(KC_A, KC_D),
@@ -352,35 +274,6 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
     ),
 
     keyboard_overrides: {},
-)
-```
-
-#### Per-Keyboard Overrides
-
-```ron
-(
-    tapping_term_ms: 130,
-    double_tap_window_ms: None,
-    enabled_keyboards: None,
-
-    remaps: { /* your default keymaps */ },
-    layers: {},
-    game_mode: (remaps: {}),
-
-    keyboard_overrides: {
-        // Different config for laptop keyboard
-        "1234:5678:0100:0003:usb-0000:00:14.0-1/input0": (
-            settings: (
-                tapping_term_ms: 150,  // Laptop keys need longer hold time
-                double_tap_window_ms: 400,
-            ),
-            keymap: (
-                base_remaps: {
-                    KC_CAPS: Key(KC_LCTL),  // Laptop uses Caps as Ctrl
-                },
-            ),
-        ),
-    },
 )
 ```
 
@@ -409,13 +302,13 @@ Manual toggle: `keyboard-middleware gamemode [on|off]`
 keyboard-middleware daemon
 
 # Check status
-systemctl --user status keyboard-middleware
+systemctl status keyboard-middleware
 
 # View live logs
-journalctl --user -u keyboard-middleware -f
+journalctl -u keyboard-middleware -f
 
 # Restart daemon
-systemctl --user restart keyboard-middleware
+systemctl restart keyboard-middleware
 ```
 
 ### Keyboard Management
@@ -427,16 +320,31 @@ keyboard-middleware list
 # Toggle which keyboards are enabled (interactive)
 keyboard-middleware toggle
 
-# Config hot-reloads automatically on save - no restart needed!
+# Validate your config
+keyboard-middleware validate
+
+# Reload config (automatic on file save, but manual trigger available)
+keyboard-middleware reload
+
+# Toggle game mode manually
+keyboard-middleware gamemode on
+keyboard-middleware gamemode off
+
+# Debug mode (show all keyboard events in real-time)
+keyboard-middleware debug
 ```
 
 ### Shell Completions
 
 ```bash
-# Generate completions
-keyboard-middleware completion bash
-keyboard-middleware completion zsh
-keyboard-middleware completion fish
+# Bash
+keyboard-middleware completion bash | sudo tee /usr/share/bash-completion/completions/keyboard-middleware
+
+# Zsh
+keyboard-middleware completion zsh | sudo tee /usr/share/zsh/site-functions/_keyboard-middleware
+
+# Fish
+keyboard-middleware completion fish > ~/.config/fish/completions/keyboard-middleware.fish
 ```
 
 ## 🐛 Troubleshooting
@@ -464,7 +372,7 @@ ps aux | grep -E "kmonad|keyd|xremap"
 
 Watch the logs when editing config:
 ```bash
-journalctl --user -u keyboard-middleware -f
+journalctl -u keyboard-middleware -f
 ```
 
 Config errors show desktop notifications and keep the previous working config.
@@ -473,10 +381,32 @@ Config errors show desktop notifications and keep the previous working config.
 
 Ensure the daemon is running:
 ```bash
-systemctl --user status keyboard-middleware
+systemctl status keyboard-middleware
 ```
 
 Check file watcher is working (should see "Config reloaded" in logs when you save).
+
+### "HRM triggers hold too fast/slow"
+
+Adjust `tapping_term_ms`:
+- **100-130ms**: More sensitive to holds
+- **150-200ms**: More sensitive to taps
+- **Recommended**: 130 for home row mods, 150+ for laptops
+
+### "W+S both pressed in game, not moving"
+
+Use SOCD in game_mode (see configuration examples above).
+
+## 📚 Related Projects
+
+Alternative keyboard remapping tools with different approaches:
+
+- **[kmonad](https://github.com/kmonad/kmonad)** - Haskell-based, cross-platform, mature codebase, S-expression config
+- **[keyd](https://github.com/rvaiya/keyd)** - C-based, key remapping via config files, active development
+- **[kanata](https://github.com/jtroo/kanata)** - Rust-based, cross-platform, programmable key remapper
+- **[xremap](https://github.com/xremap/xremap)** - Python-based, X11 only, older project
+
+Each has different strengths - choose based on your platform, performance needs, and configuration preferences.
 
 ## 📚 Further Reading
 
@@ -495,5 +425,4 @@ MIT License - See [LICENSE](LICENSE) for details.
 ## 🙏 Acknowledgments
 
 - Inspired by [QMK Firmware](https://qmk.fm/)
-- Compared with [kmonad](https://github.com/kmonad/kmonad)
 - Built with Rust and [evdev](https://github.com/emberian/evdev)

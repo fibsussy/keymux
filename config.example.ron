@@ -1,179 +1,317 @@
+// ============================================================================
 // Keyboard Middleware Configuration Example
-// Copy this to ~/.config/keyboard-middleware/config.ron and customize
+// ============================================================================
 //
-// Note: Use CMD() action to run arbitrary shell commands on key press
+// Copy this to: ~/.config/keyboard-middleware/config.ron
+// View keyboard IDs: keyboard-middleware list
+// Validate config:   keyboard-middleware validate
+//
+// TIP: Start simple! Remap a few keys, test, then expand.
+// ============================================================================
 
 (
     // ============================================================================
     // TIMING SETTINGS
     // ============================================================================
-
-    // Time (in ms) to hold a key before it's considered "held" vs "tapped"
-    // Lower = more sensitive to holds, Higher = more sensitive to taps
-    // Recommended: 130-200ms for home row mods
+    
     tapping_term_ms: 130,
-
-    // Window (in ms) for detecting double-taps
-    // Set to None to disable double-tap detection, or Some(300) for 300ms window
+    
+    // How long (ms) to hold before tap becomes hold
+    // - Lower (100-130): More sensitive to holds
+    // - Higher (150-200): More sensitive to taps
+    // - Recommended: 130 for home row mods, 150+ for laptops
+    
     double_tap_window_ms: None,
+    
+    // Window (ms) for detecting double-taps
+    // - None: Disable double-tap detection
+    // - Some(300): Detect double-taps within 300ms
+    // - Used with OVERLOAD action (see below)
 
     // ============================================================================
     // KEYBOARD SELECTION
     // ============================================================================
-
-    // List of keyboard IDs to enable (use `keyboard-middleware list` to see IDs)
-    // Set to None to process all keyboards, or Some([...]) for specific ones
+    
     enabled_keyboards: None,
+    
+    // Which keyboards to process:
+    // - None: Process all keyboards (recommended)
+    // - Some([...]): Only process specific keyboards by ID
+    //
+    // Example:
     // enabled_keyboards: Some([
-    //     "1234:5678:0100:0003:usb-0000:00:00.0-1/input0",
+    //     "1234:5678:0100:0003",
+    //     "2e3c:c365:0110:0003",
     // ]),
 
     // ============================================================================
     // BASE LAYER REMAPS
     // ============================================================================
+    //
+    // Remaps that are always active (unless overridden by layers or game mode)
+    // ============================================================================
 
-    // Key remaps that are always active (unless overridden by layers or game mode)
     remaps: {
-        // Simple key remaps
-        // KC_CAPS: Key(KC_ESC),          // Caps Lock -> Escape
-        // KC_ESC: Key(KC_GRV),            // Escape -> Backtick/Tilde
+        // === SIMPLE KEY REMAPS ===
+        
+        // Caps Lock -> Escape (very useful!)
+        KC_CAPS: Key(KC_ESC),
+        
+        // Escape -> Backtick (for programmers using Vim/terminal)
+        KC_ESC: Key(KC_GRV),
 
-        // Layer switching - now with string-based layer names!
-        // KC_LALT: TO(Layer("nav")),      // Left Alt activates NAV layer
+        // === LAYER SWITCHING ===
+        //
+        // Hold a key to activate a different keymap
+        // Great for navigation, symbols, numpad, etc.
+        //
+        // Example: Hold Left Alt for navigation keys
+        KC_LALT: TO("nav"),
 
-        // Home row mods (tap for letter, hold for modifier)
-        // NOW WORKS ON ANY KEY! Not limited to ASDF JKL;
+        // === HOME ROW MODS (HRM) ===
+        //
+        // Tap for the letter, hold for a modifier
+        // Use permissive hold: pressing another key while holding resolves to modifier
+        // Best for: A, S, D, F (left) and J, K, L, ; (right)
+        //
+        // Why permissive hold?
+        //   - Hold 's' (waiting for tap/hold decision)
+        //   - Press 'd' while still holding 's'
+        //   - 's' resolves to Alt, and 'd' registers as 'd'
+        //   - Allows typing without waiting for tap timeout!
+        //
         // Left hand mods:
-        // KC_A: HR(KC_A, KC_LGUI),        // A = tap A, hold for Super/Win/Cmd
-        // KC_S: HR(KC_S, KC_LALT),        // S = tap S, hold for Alt
-        // KC_D: HR(KC_D, KC_LCTL),        // D = tap D, hold for Ctrl
-        // KC_F: HR(KC_F, KC_LSFT),        // F = tap F, hold for Shift
-
+        KC_A: HR(KC_A, KC_LGUI),  // A = tap 'a', hold for Super/Win/Cmd
+        KC_S: HR(KC_S, KC_LALT),  // S = tap 's', hold for Alt
+        KC_D: HR(KC_D, KC_LCTL),  // D = tap 'd', hold for Ctrl
+        KC_F: HR(KC_F, KC_LSFT),  // F = tap 'f', hold for Shift
+        
         // Right hand mods:
-        // KC_J: HR(KC_J, KC_RSFT),        // J = tap J, hold for Shift
-        // KC_K: HR(KC_K, KC_RCTL),        // K = tap K, hold for Ctrl
-        // KC_L: HR(KC_L, KC_RALT),        // L = tap L, hold for Alt
-        // KC_SCLN: HR(KC_SCLN, KC_RGUI),  // ; = tap ;, hold for Super
+        KC_J: HR(KC_J, KC_RSFT),  // J = tap 'j', hold for Shift
+        KC_K: HR(KC_K, KC_RCTL),  // K = tap 'k', hold for Ctrl
+        KC_L: HR(KC_L, KC_RALT),  // L = tap 'l', hold for Alt
+        KC_SCLN: HR(KC_SCLN, KC_RGUI),  // ; = tap ';', hold for Super
 
-        // You can even use HR mods on non-home-row keys now!
-        // KC_SPC: HR(KC_SPC, KC_LSFT),   // Space = tap Space, hold for Shift
-        // KC_T: HR(KC_T, KC_LGUI),       // Works on any key!
+        // === OVERLOAD ACTION ===
+        //
+        // Tap/hold with permissive hold AND optional double-tap support
+        // Difference from HRM: Supports double-tap to hold the tap key instead
+        //
+        // Behaviors:
+        //   1. Tap (< tapping_term_ms): Emits tap_key (base key)
+        //   2. Hold (> tapping_term_ms): Emits hold_key (modifier)
+        //   3. Permissive Hold: Press another key while pending = hold_key
+        //   4. Double-Tap (if enabled): Press twice to hold tap_key
+        //
+        // When to use OVERLOAD vs HRM:
+        //   - Use HRM for home row mods (letters -> modifiers)
+        //   - Use OVERLOAD when you want double-tap functionality
+        //
+        // Example: Space bar tap/hold
+        //   - Tap: Space (normal typing)
+        //   - Hold: Ctrl (with permissive hold for typing)
+        //   - Double-tap: Hold Space (if you want to hold spacebar)
+        //
+        // Note: To use double-tap, set `double_tap_window_ms: Some(300)`
+        KC_SPC: OVERLOAD(KC_SPC, KC_LCTL),
 
-        // OVERLOAD action (simpler tap/hold without permissive hold)
-        // KC_SPC: OVERLOAD(KC_SPC, KC_LCTL),  // Space = tap Space, hold for Ctrl
+        // === COMMAND RUNNER ===
+        //
+        // Execute arbitrary shell commands on key press
+        // Great for media controls, system commands, custom scripts
+        //
+        // Examples:
+        // KC_F1: CMD("/usr/bin/notify-send 'Hello from keyboard!'"),
+        // KC_F2: CMD("/usr/bin/playerctl play-pause"),
+        // KC_F3: CMD("/usr/bin/firefox"),
+        // KC_F4: CMD("/usr/bin/discord"),
     },
 
     // ============================================================================
-    // LAYERS (NOW FULLY CUSTOMIZABLE!)
+    // LAYERS (UNLIMITED CUSTOMIZATION!)
+    // ============================================================================
+    //
+    // Define custom layers - you can name them ANYTHING you want!
+    // Activate with TO("layer_name") in your keymaps
+    //
+    // Common layer names: "nav", "num", "sym", "media", "coding"
+    // But you can use: "gaming", "work", "home", "my_custom_layer_123"
     // ============================================================================
 
-    // Define custom layers - you can name them ANYTHING you want!
-    // No more limited to L_NAV, L_NUM, etc.
     layers: {
-        // Example Navigation Layer
-        // "nav": (
-        //     remaps: {
-        //         // Keep mods accessible
-        //         KC_A: Key(KC_LGUI),
-        //         KC_S: Key(KC_LALT),
-        //         KC_D: Key(KC_LCTL),
-        //         KC_F: Key(KC_LSFT),
-        //
-        //         // Vim-style navigation
-        //         KC_H: Key(KC_LEFT),
-        //         KC_J: Key(KC_DOWN),
-        //         KC_K: Key(KC_UP),
-        //         KC_L: Key(KC_RGHT),
-        //
-        //         // Run custom command
-        //         KC_BSPC: CMD("/usr/bin/notify-send 'Hello from keyboard!'"),
-        //     },
-        // ),
-
-        // Example Number Layer
-        // "num": (
-        //     remaps: {
-        //         KC_M: Key(KC_1),
-        //         KC_COMM: Key(KC_2),
-        //         KC_DOT: Key(KC_3),
-        //         KC_J: Key(KC_4),
-        //         KC_K: Key(KC_5),
-        //         KC_L: Key(KC_6),
-        //         KC_U: Key(KC_7),
-        //         KC_I: Key(KC_8),
-        //         KC_O: Key(KC_9),
-        //         KC_P: Key(KC_0),
-        //     },
-        // ),
-
-        // You can create as many layers as you want with any names!
-        // "symbols": ( remaps: { ... } ),
-        // "coding": ( remaps: { ... } ),
-        // "media": ( remaps: { ... } ),
-        // "my_custom_layer_123": ( remaps: { ... } ),
+        "nav": (
+            remaps: {
+                // Keep modifiers accessible on nav layer
+                // (so you can Ctrl+arrow keys)
+                KC_A: Key(KC_LGUI),
+                KC_S: Key(KC_LALT),
+                KC_D: Key(KC_LCTL),
+                KC_F: Key(KC_LSFT),
+                
+                // Vim-style navigation
+                // (IJKL becomes arrow keys)
+                KC_H: Key(KC_LEFT),
+                KC_J: Key(KC_DOWN),
+                KC_K: Key(KC_UP),
+                KC_L: Key(KC_RGHT),
+                
+                // Add navigation helpers
+                KC_U: Key(KC_HOME),    // U = Home
+                KC_I: Key(KC_PGUP),    // I = Page Up
+                KC_N: Key(KC_PGDN),    // N = Page Down
+                KC_M: Key(KC_END),     // M = End
+                
+                // Example: Run custom command on nav layer
+                // KC_BSPC: CMD("/usr/bin/notify-send 'Nav layer active!'"),
+            },
+        ),
+        
+        "num": (
+            remaps: {
+                // Number row becomes numpad
+                KC_Q: Key(KC_1),
+                KC_W: Key(KC_2),
+                KC_E: Key(KC_3),
+                KC_R: Key(KC_4),
+                KC_T: Key(KC_5),
+                KC_Y: Key(KC_6),
+                KC_U: Key(KC_7),
+                KC_I: Key(KC_8),
+                KC_O: Key(KC_9),
+                KC_P: Key(KC_0),
+                
+                // Add numpad operators
+                KC_A: Key(KC_KP_ASTERISK),  // * 
+                KC_S: Key(KC_KP_SLASH),    // /
+                KC_D: Key(KC_KP_MINUS),    // -
+                KC_F: Key(KC_KP_PLUS),     // +
+            },
+        ),
+        
+        "sym": (
+            remaps: {
+                // Common symbols
+                KC_Q: Key(KC_EXCLAIM),   // !
+                KC_W: Key(KC_AT),         // @
+                KC_E: Key(KC_HASH),       // #
+                KC_R: Key(KC_DOLLAR),    // $
+                KC_T: Key(KC_PERCENT),    // %
+                KC_Y: Key(KC_CARET),     // ^
+                KC_U: Key(KC_AMPERSAND),  // &
+                KC_I: Key(KC_ASTERISK),   // *
+                KC_O: Key(KC_LPRN),      // (
+                KC_P: Key(KC_RPRN),      // )
+                
+                // More symbols
+                KC_A: Key(KC_LCBR),     // {
+                KC_S: Key(KC_RCBR),     // }
+                KC_D: Key(KC_LBRC),     // [
+                KC_F: Key(KC_RBRC),     // ]
+                KC_G: Key(KC_PIPE),      // |
+                KC_H: Key(KC_BSLS),     // \
+                KC_J: Key(KC_COLN),      // :
+                KC_K: Key(KC_QUOT),      // '
+                KC_L: Key(KC_DQUO),      // "
+            },
+        ),
+        
+        "media": (
+            remaps: {
+                // Media control layer
+                KC_Q: CMD("/usr/bin/playerctl previous"),
+                KC_W: CMD("/usr/bin/playerctl play-pause"),
+                KC_E: CMD("/usr/bin/playerctl stop"),
+                KC_R: CMD("/usr/bin/playerctl next"),
+                
+                KC_A: CMD("/usr/bin/pactl set-sink-volume @DEFAULT_SINK@ -5%"),
+                KC_S: CMD("/usr/bin/pactl set-sink-volume @DEFAULT_SINK@ +5%"),
+                KC_D: CMD("/usr/bin/pactl set-sink-mute @DEFAULT_SINK@ toggle"),
+                
+                KC_F: CMD("/usr/bin/notify-send 'Media Layer Active'"),
+            },
+        ),
     },
 
     // ============================================================================
     // GAME MODE
     // ============================================================================
+    //
+    // Special keymap that activates when gaming is detected
+    // Detection is automatic: Steam, Gamescope, or process tree walking
+    // Toggle manually: keyboard-middleware gamemode [on|off]
+    //
+    // Why separate game mode?
+    //   - Disable HRM/layer switches (can interfere with gaming)
+    //   - Enable SOCD for FPS movement (prevents W+S conflicts)
+    //   - Keep essential key remaps (Esc, etc.)
+    // ============================================================================
 
-    // Special remaps that activate when gaming is detected
-    // Detection is automatic via Steam, Gamescope, or process tree walking
-    // Toggle manually with: keyboard-middleware gamemode [on|off]
     game_mode: (
         remaps: {
-            // Keep essential key remaps
-            // KC_CAPS: Key(KC_ESC),
-            // KC_ESC: Key(KC_GRV),
+            // Keep essential remaps
+            KC_CAPS: Key(KC_ESC),
+            KC_ESC: Key(KC_GRV),
 
-            // SOCD (Simultaneous Opposite Cardinal Direction) - NOW FULLY GENERIC!
-            // Works with ANY opposing pairs, not just WASD!
-            // Uses last-input-priority: pressing W then S = S, release S = W again
+            // === SOCD CLEANER FOR GAMING ===
+            //
+            // SOCD = Simultaneous Opposite Cardinal Direction
+            // Solves FPS gaming problems:
+            //   - Prevents W+S (forward + back) from moving
+            //   - Prevents A+D (left + right) from moving
+            // Uses last-input-priority: Pressing W then S = S, release S = W again
+            //
+            // Traditional WASD movement:
+            KC_W: SOCD(KC_W, [KC_S]),     // W opposes S
+            KC_S: SOCD(KC_S, [KC_W]),     // S opposes W
+            KC_A: SOCD(KC_A, [KC_D]),     // A opposes D
+            KC_D: SOCD(KC_D, [KC_A]),     // D opposes A
             
-            // WASD movement (traditional FPS)
-            // KC_W: SOCD(KC_W, [KC_S]),
-            // KC_S: SOCD(KC_S, [KC_W]),
-            // KC_A: SOCD(KC_A, [KC_D]),
-            // KC_D: SOCD(KC_D, [KC_A]),
-
-            // For arrow keys (can coexist with WASD SOCD):
-            // KC_UP: SOCD(KC_UP, [KC_DOWN]),
-            // KC_DOWN: SOCD(KC_DOWN, [KC_UP]),
-            // KC_LEFT: SOCD(KC_LEFT, [KC_RGHT]),
-            // KC_RGHT: SOCD(KC_RGHT, [KC_LEFT]),
-
-            // For complex multi-directional SOCD (e.g., unpress multiple keys):
-            // KC_W: SOCD(KC_W, [KC_S, KC_DOWN]),  // W cancels both S and DOWN
+            // Arrow keys (can coexist with WASD):
+            KC_UP: SOCD(KC_UP, [KC_DOWN]),
+            KC_DOWN: SOCD(KC_DOWN, [KC_UP]),
+            KC_LEFT: SOCD(KC_LEFT, [KC_RGHT]),
+            KC_RGHT: SOCD(KC_RGHT, [KC_LEFT]),
+            
+            // === COMPLEX SOCD (MULTIPLE OPPOSING KEYS) ===
+            //
+            // You can cancel multiple keys with one SOCD definition
+            // Example: W cancels both S (back) and DOWN (down in nav layer)
+            // KC_W: SOCD(KC_W, [KC_S, KC_DOWN]),
         },
     ),
 
     // ============================================================================
     // PER-KEYBOARD OVERRIDES
     // ============================================================================
+    //
+    // Override settings for specific keyboards
+    // Useful when you have multiple keyboards with different preferences
+    // Find keyboard IDs with: keyboard-middleware list
+    // ============================================================================
 
-    // Override settings for specific keyboards (use keyboard ID from `list` command)
     keyboard_overrides: {
+        // Example: Override timing for a specific keyboard
         // "1234:5678:0100:0003:usb-0000:00:00.0-1/input0": (
-        //     // Override timing settings
         //     settings: (
+        //         // Longer timing for laptop keyboard
         //         tapping_term_ms: 150,
-        //         double_tap_window_ms: Some(400),
+        //         // Enable double-tap for this keyboard
+        //         double_tap_window_ms: Some(300),
         //     ),
-        //
-        //     // Override keymap
+        //     // Override keymap for this keyboard
         //     keymap: (
         //         base_remaps: {
-        //             KC_CAPS: Key(KC_LCTL),
+        //             KC_CAPS: Key(KC_LCTL),  // Different caps behavior
         //         },
         //         layers: {
-        //             Layer("nav"): (
+        //             "nav": (
         //                 remaps: {
         //                     KC_H: Key(KC_LEFT),
         //                 },
         //             ),
         //         },
         //         game_mode_remaps: {
-        //             KC_W: Key(KC_UP),
+        //             KC_W: Key(KC_UP),  // Different game mode setup
         //         },
         //     ),
         // ),
@@ -181,33 +319,42 @@
 )
 
 // ============================================================================
-// NEW FEATURES IN THIS VERSION
+// HELPFUL COMMANDS
 // ============================================================================
 //
-// 1. UNLIMITED CUSTOM LAYERS
-//    - Use any string as layer name: "nav", "coding", "media", etc.
-//    - No more limited to 5 predefined layers!
+// List all keyboards and their IDs:
+//     keyboard-middleware list
 //
-// 2. GENERIC SOCD (Last-Input-Priority with Stack)
-//    - Works with ANY opposing pairs (WASD, arrows, custom binds)
-//    - Tracks all held keys, only emits the most recent
-//    - New syntax: SOCD(key, [opposing_keys...])
-//    - Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
+// Validate your config:
+//     keyboard-middleware validate
 //
-// 3. HR MODS ON ANY KEY
-//    - No longer limited to ASDF JKL; keys
-//    - Use HR() on literally any key you want!
+// Reload config (automatic on file save, but manual trigger available):
+//     keyboard-middleware reload
 //
-// 4. COMMAND RUNNER
-//    - New syntax: CMD("/path/to/command with args")
-//    - Run any shell command on key press
-//    - Example: CMD("/usr/bin/notify-send 'Hello'")
+// Toggle game mode manually:
+//     keyboard-middleware gamemode on
+//     keyboard-middleware gamemode off
 //
-// 5. 150+ KEYS SUPPORTED
-//    - All F-keys (F1-F24)
-//    - Complete numpad
-//    - Media keys (play, volume, etc.)
-//    - System keys (calculator, browser, etc.)
-//    - Navigation keys (page up/down, home, end, insert)
+// Debug mode (show all keyboard events in real-time):
+//     keyboard-middleware debug
+//
+// ============================================================================
+// TROUBLESHOOTING
+// ============================================================================
+//
+// Problem: "Config validation failed"
+//   Solution: Run `keyboard-middleware validate` to see specific errors
+//
+// Problem: "Keys not registering"
+//   Solution: Check `keyboard-middleware list` - keyboard might not be enabled
+//
+// Problem: "HRM triggers hold too fast/slow"
+//   Solution: Adjust `tapping_term_ms` (130 = balanced, 150 = slower hold)
+//
+// Problem: "W+S both pressed in game, not moving"
+//   Solution: Use SOCD in game_mode (see example above)
+//
+// Problem: "Want to double-tap Space to hold it"
+//   Solution: Set `double_tap_window_ms: Some(300)` and use OVERLOAD
 //
 // ============================================================================
