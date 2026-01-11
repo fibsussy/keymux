@@ -47,6 +47,8 @@ pub struct AsyncDaemon {
     active_processors: HashMap<PathBuf, (KeyboardId, u32, ProcessorHandle)>,
     /// Keyboard ownership (keyboard_id -> uid)
     keyboard_owners: HashMap<KeyboardId, u32>,
+    /// Current game mode state (preserved across thread restarts)
+    game_mode_active: bool,
 }
 
 impl AsyncDaemon {
@@ -70,6 +72,7 @@ impl AsyncDaemon {
             all_keyboards: HashMap::new(),
             active_processors: HashMap::new(),
             keyboard_owners: HashMap::new(),
+            game_mode_active: false,
         })
     }
 
@@ -101,7 +104,6 @@ impl AsyncDaemon {
         let mut hotplug_check = tokio::time::interval(Duration::from_millis(100));
         let mut ipc_check = tokio::time::interval(Duration::from_millis(10));
         let mut session_check = tokio::time::interval(Duration::from_secs(5));
-        let mut cleanup_check = tokio::time::interval(Duration::from_secs(30));
         let mut niri_check = tokio::time::interval(Duration::from_millis(50));
 
         loop {
@@ -115,9 +117,6 @@ impl AsyncDaemon {
                 _ = session_check.tick() => {
                     self.refresh_sessions().await;
                     self.sync_keyboards_to_users().await;
-                }
-                _ = cleanup_check.tick() => {
-                    self.cleanup_dead_threads().await;
                 }
                 _ = niri_check.tick() => {
                     self.handle_niri_events(&niri_rx).await;
@@ -428,18 +427,22 @@ impl AsyncDaemon {
                     uid,
                     ProcessorHandle {
                         shutdown_tx,
-                        game_mode_tx,
+                        game_mode_tx: game_mode_tx.clone(),
                         thread_handle: Some(handle),
                     },
                 ),
             );
 
+            // Send current game mode state to the new thread to preserve state across restarts
+            let _ = game_mode_tx.send(self.game_mode_active);
+
             info!(
-                "Started thread {}/{} for {} at {}",
+                "Started thread {}/{} for {} at {} (game_mode: {})",
                 idx + 1,
                 event_paths.len(),
                 kbd_name,
-                event_path.display()
+                event_path.display(),
+                self.game_mode_active
             );
         }
 
@@ -723,7 +726,7 @@ impl AsyncDaemon {
 
     /// Handle niri window focus events
     #[allow(clippy::future_not_send)]
-    async fn handle_niri_events(&self, rx: &mpsc::Receiver<crate::niri::NiriEvent>) {
+    async fn handle_niri_events(&mut self, rx: &mpsc::Receiver<crate::niri::NiriEvent>) {
         while let Ok(event) = rx.try_recv() {
             match event {
                 crate::niri::NiriEvent::WindowFocusChanged(window_info) => {
@@ -737,13 +740,22 @@ impl AsyncDaemon {
     }
 
     /// Set game mode for all active processors
-    async fn set_game_mode_all(&self, enabled: bool) {
+    async fn set_game_mode_all(&mut self, enabled: bool) {
+        // Only update if the state actually changed
+        if self.game_mode_active == enabled {
+            return;
+        }
+
         info!(
             "Setting game mode to: {} ({} active threads)",
             enabled,
             self.active_processors.len()
         );
 
+        // Store the new state so new threads will get it
+        self.game_mode_active = enabled;
+
+        // Send to all active threads
         for (_, _, handle) in self.active_processors.values() {
             let _ = handle.game_mode_tx.send(enabled);
         }
@@ -753,48 +765,6 @@ impl AsyncDaemon {
     async fn refresh_sessions(&self) {
         if let Err(e) = self.session_manager.refresh_sessions().await {
             error!("Failed to refresh sessions: {}", e);
-        }
-    }
-
-    /// Cleanup dead threads
-    async fn cleanup_dead_threads(&mut self) {
-        let mut dead_processors = Vec::new();
-
-        for (event_path, (_kbd_id, _uid, handle)) in &self.active_processors {
-            if let Some(thread_handle) = &handle.thread_handle {
-                if thread_handle.is_finished() {
-                    dead_processors.push(event_path.clone());
-                }
-            }
-        }
-
-        for event_path in dead_processors {
-            warn!("Cleaning up dead processor: {}", event_path.display());
-
-            // Get keyboard ID and UID before removing
-            let (kbd_id, uid) = self
-                .active_processors
-                .get(&event_path)
-                .map(|(k, u, _)| (k.clone(), *u))
-                .unwrap();
-
-            // Remove this specific event path processor
-            self.active_processors.remove(&event_path);
-
-            // Attempt restart
-            if let Some(meta) = self.all_keyboards.get(&kbd_id).cloned() {
-                if meta.connected {
-                    info!("Attempting to restart processor: {}", event_path.display());
-
-                    // Only restart this specific event file
-                    if let Err(e) = self
-                        .start_processors_for_keyboard(&kbd_id, &meta.name, &[event_path], uid)
-                        .await
-                    {
-                        error!("Failed to restart processor: {}", e);
-                    }
-                }
-            }
         }
     }
 }
