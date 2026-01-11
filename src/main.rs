@@ -3,6 +3,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
+use config::Layer;
 
 pub mod config;
 mod config_manager;
@@ -52,8 +53,15 @@ enum Commands {
     /// Toggle keyboard enable/disable state
     Toggle,
 
-    /// Set or update the password for typing
-    SetPassword,
+    /// Reload configuration from disk
+    Reload,
+
+    /// Validate configuration file for errors
+    Validate {
+        /// Path to config file (default: ~/.config/keyboard-middleware/config.ron)
+        #[arg(short, long)]
+        config: Option<std::path::PathBuf>,
+    },
 
     /// Show debugging information
     Debug,
@@ -97,8 +105,11 @@ fn main() -> Result<()> {
         Some(Commands::Toggle) => {
             toggle::run_toggle()?;
         }
-        Some(Commands::SetPassword) => {
-            set_password()?;
+        Some(Commands::Reload) => {
+            run_reload()?;
+        }
+        Some(Commands::Validate { config }) => {
+            validate_config(config.as_deref())?;
         }
         Some(Commands::Debug) => {
             debug::run_debug()?;
@@ -144,8 +155,13 @@ fn print_help() {
     );
     println!(
         "  {}  {}",
-        "set-password".bright_green().bold(),
-        "Set or update the password for typing".dimmed()
+        "reload".bright_green().bold(),
+        "Reload configuration from disk".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "validate".bright_green().bold(),
+        "Validate configuration file".dimmed()
     );
     println!(
         "  {}    {}",
@@ -194,108 +210,297 @@ fn generate_completion(shell: clap_complete::Shell) {
     generate(shell, &mut cmd, bin_name, &mut io::stdout());
 }
 
-fn set_password() -> Result<()> {
-    use config::Passwords;
-    use dialoguer::{Confirm, Password};
+fn validate_config(config_path: Option<&std::path::Path>) -> Result<()> {
+    use config::{Action, Config, KeyCode};
+    use std::collections::{HashMap, HashSet};
 
     println!();
     println!(
         "{}",
         "═══════════════════════════════════════".bright_cyan()
     );
-    println!("  {}", "Password Configuration".bright_cyan().bold());
+    println!("  {}", "Config Validation".bright_cyan().bold());
     println!(
         "{}",
         "═══════════════════════════════════════".bright_cyan()
     );
     println!();
+
+    // Determine config path
+    let config_path = if let Some(path) = config_path {
+        path.to_path_buf()
+    } else {
+        Config::default_path()?
+    };
+
     println!(
-        "{}",
-        "  Set a password that can be typed with a dedicated key.".dimmed()
-    );
-    println!(
-        "{}",
-        "  Configure the key in your config.ron file using Action::Password".dimmed()
+        "  {} {}",
+        "Config file:".bright_yellow(),
+        config_path.display().to_string().dimmed()
     );
     println!();
 
-    // Get password file path (default ID)
-    let password_path = Passwords::default_path()?;
+    // Try to load the config
+    print!("  {} Loading config... ", "→".bright_blue());
+    let config = match Config::load(&config_path) {
+        Ok(cfg) => {
+            println!("{}", "✓".bright_green().bold());
+            cfg
+        }
+        Err(e) => {
+            println!("{}", "✗".bright_red().bold());
+            println!();
+            println!("  {} {}", "Error:".bright_red().bold(), e);
+            println!();
+            return Err(e);
+        }
+    };
 
-    // Show current password state
-    let current_password = Passwords::load("default")?;
-    if current_password.is_some() {
+    let mut errors: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
+
+    // Validation 1: Check SOCD pairs are symmetric
+    print!("  {} Checking SOCD pairs... ", "→".bright_blue());
+    let mut socd_map: HashMap<KeyCode, KeyCode> = HashMap::new();
+
+    let mut extract_socd = |remaps: &HashMap<KeyCode, Action>| {
+        let mut pairs = Vec::new();
+        for (key, action) in remaps {
+            if let Action::SOCD(this_key, opposing_keys) = action {
+                if key != this_key {
+                    errors.push(format!(
+                        "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
+                        key, this_key
+                    ));
+                }
+                // Store each opposing key as a pair for symmetry check
+                for opposing_key in opposing_keys {
+                    pairs.push((*this_key, *opposing_key));
+                }
+            }
+        }
+        pairs
+    };
+
+    for (key1, key2) in extract_socd(&config.remaps) {
+        socd_map.insert(key1, key2);
+    }
+    for layer_config in config.layers.values() {
+        for (key1, key2) in extract_socd(&layer_config.remaps) {
+            socd_map.insert(key1, key2);
+        }
+    }
+    for (key1, key2) in extract_socd(&config.game_mode.remaps) {
+        socd_map.insert(key1, key2);
+    }
+
+    // Check symmetry
+    let mut socd_checked = HashSet::new();
+    for (key1, key2) in &socd_map {
+        if socd_checked.contains(key1) {
+            continue;
+        }
+        if let Some(reverse) = socd_map.get(key2) {
+            if reverse != key1 {
+                errors.push(format!(
+                    "SOCD pair asymmetric: {:?} → {:?}, but {:?} → {:?}",
+                    key1, key2, key2, reverse
+                ));
+            }
+            socd_checked.insert(*key1);
+            socd_checked.insert(*key2);
+        } else {
+            errors.push(format!(
+                "SOCD missing reverse pair: {:?} → {:?}, but {:?} not defined",
+                key1, key2, key2
+            ));
+        }
+    }
+
+    if errors.is_empty() {
+        println!("{} {} pairs", "✓".bright_green().bold(), socd_map.len() / 2);
+    } else {
+        println!("{}", "✗".bright_red().bold());
+    }
+
+    // Validation 2: Check timing values are reasonable
+    print!("  {} Checking timing settings... ", "→".bright_blue());
+    if config.tapping_term_ms == 0 || config.tapping_term_ms > 1000 {
+        errors.push(format!(
+            "tapping_term_ms out of reasonable range (0-1000): {}",
+            config.tapping_term_ms
+        ));
+    }
+    if let Some(window) = config.double_tap_window_ms {
+        if window == 0 || window > 1000 {
+            errors.push(format!(
+                "double_tap_window_ms out of reasonable range (0-1000): {}",
+                window
+            ));
+        }
+    }
+    println!("{}", "✓".bright_green().bold());
+
+    // Validation 4: Check layer references
+    print!("  {} Checking layer references... ", "→".bright_blue());
+    let mut referenced_layers = HashSet::new();
+
+    let extract_layer_refs = |remaps: &HashMap<KeyCode, Action>| {
+        let mut refs = Vec::new();
+        for action in remaps.values() {
+            if let Action::TO(layer) = action {
+                refs.push(layer.0.clone());
+            }
+        }
+        refs
+    };
+
+    for layer_name in extract_layer_refs(&config.remaps) {
+        referenced_layers.insert(layer_name);
+    }
+    for layer_config in config.layers.values() {
+        for layer_name in extract_layer_refs(&layer_config.remaps) {
+            referenced_layers.insert(layer_name);
+        }
+    }
+
+    let mut missing_layers = Vec::new();
+    for layer_name in &referenced_layers {
+        if layer_name != "base" && !config.layers.contains_key(&Layer(layer_name.clone())) {
+            missing_layers.push(layer_name.clone());
+        }
+    }
+
+    if missing_layers.is_empty() {
+        println!(
+            "{} {} layers",
+            "✓".bright_green().bold(),
+            config.layers.len()
+        );
+    } else {
+        println!("{}", "✗".bright_red().bold());
+        for layer_name in missing_layers {
+            errors.push(format!("Referenced layer not defined: \"{}\"", layer_name));
+        }
+    }
+
+    // Print summary
+    println!();
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
+
+    if errors.is_empty() && warnings.is_empty() {
         println!(
             "  {} {}",
-            "Current:".bright_yellow(),
-            "Password is set".green()
+            "✓".bright_green().bold(),
+            "Config is valid!".bright_green()
         );
-        println!();
-
-        let clear = Confirm::new()
-            .with_prompt("  Clear existing password?")
-            .default(false)
-            .interact()?;
-
-        if clear {
-            if password_path.exists() {
-                std::fs::remove_file(&password_path)?;
+    } else {
+        if !errors.is_empty() {
+            println!(
+                "  {} {}",
+                "✗".bright_red().bold(),
+                format!("{} error(s)", errors.len()).bright_red()
+            );
+            for error in &errors {
+                println!("    {} {}", "•".bright_red(), error);
             }
+        }
+        if !warnings.is_empty() {
+            println!(
+                "  {} {}",
+                "!".bright_yellow().bold(),
+                format!("{} warning(s)", warnings.len()).bright_yellow()
+            );
+            for warning in &warnings {
+                println!("    {} {}", "•".bright_yellow(), warning);
+            }
+        }
+    }
+
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
+    println!();
+
+    if !errors.is_empty() {
+        Err(anyhow::anyhow!(
+            "Config validation failed with {} error(s)",
+            errors.len()
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Reload configuration from disk via IPC
+fn run_reload() -> Result<()> {
+    use crate::ipc::{send_request, IpcRequest, IpcResponse};
+
+    println!();
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
+    println!("  {}", "Reload Configuration".bright_cyan().bold());
+    println!(
+        "{}",
+        "═══════════════════════════════════════".bright_cyan()
+    );
+    println!();
+
+    print!("  {} Sending reload request... ", "→".bright_blue());
+
+    match send_request(&IpcRequest::Reload) {
+        Ok(IpcResponse::Ok) => {
+            println!("{}", "✓".bright_green().bold());
             println!();
             println!(
                 "  {} {}",
                 "✓".bright_green().bold(),
-                "Password cleared".green()
+                "Configuration reloaded successfully!".green()
             );
             println!();
-            return Ok(());
         }
-    } else {
-        println!(
-            "  {} {}",
-            "Current:".bright_yellow(),
-            "No password set".dimmed()
-        );
-        println!();
+        Ok(IpcResponse::Error(msg)) => {
+            println!("{}", "✗".bright_red().bold());
+            println!();
+            println!("  {} {}", "✗".bright_red().bold(), msg.red());
+            println!();
+            anyhow::bail!("Config reload failed");
+        }
+        Ok(response) => {
+            println!("{}", "✗".bright_red().bold());
+            println!();
+            println!(
+                "  {} Unexpected response: {:?}",
+                "✗".bright_red().bold(),
+                response
+            );
+            println!();
+            anyhow::bail!("Unexpected response from daemon");
+        }
+        Err(e) => {
+            println!("{}", "✗".bright_red().bold());
+            println!();
+            println!(
+                "  {} {}",
+                "✗".bright_red().bold(),
+                format!("Failed to connect to daemon: {}", e).red()
+            );
+            println!();
+            println!(
+                "  {} {}",
+                "Tip:".bright_yellow().bold(),
+                "Make sure the daemon is running (usually via systemd)".dimmed()
+            );
+            println!();
+            anyhow::bail!("Failed to reload configuration");
+        }
     }
-
-    // Get password input
-    let password = Password::new()
-        .with_prompt("  Enter password")
-        .with_confirmation("  Confirm password", "  Passwords don't match, try again")
-        .interact()?;
-
-    if password.is_empty() {
-        println!();
-        println!(
-            "  {} {}",
-            "✗".bright_red().bold(),
-            "Password cannot be empty".red()
-        );
-        println!();
-        return Ok(());
-    }
-
-    // Ensure config directory exists
-    if let Some(parent) = password_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // Save to password file (plain text)
-    std::fs::write(&password_path, password)?;
-
-    println!();
-    println!(
-        "  {} {}",
-        "✓".bright_green().bold(),
-        "Password saved successfully!".green()
-    );
-    println!();
-    println!(
-        "  {} Edit your config.ron to assign a key to Password(\"default\")",
-        "Tip:".bright_yellow().bold()
-    );
-    println!();
 
     Ok(())
 }

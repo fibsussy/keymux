@@ -4,7 +4,7 @@
 
 This document describes the architecture and comprehensive feature set of the keyboard middleware system, designed to provide high-performance, fully customizable key processing with robust management capabilities.
 
-This is a **QMK-inspired keyboard remapping daemon** that runs on Linux, providing instant key processing with zero-latency while supporting advanced features like home row mods, layers, SOCD, game mode detection, and password typing.
+This is a **QMK-inspired keyboard remapping daemon** that runs on Linux, providing instant key processing with zero-latency while supporting advanced features like home row mods, layers, SOCD, game mode detection, and command execution.
 
 ## Design Goals
 
@@ -180,61 +180,31 @@ game_mode: (
 
 ---
 
-#### 5. **Password Typer**
+#### 5. **Command Runner**
 
-**Type passwords instantly from encrypted files** - supports multiple passwords!
+**Execute arbitrary shell commands on key press**
 
-**Syntax:** `Password("identifier")`
-
-**File path:** `~/.config/keyboard-middleware/password_{identifier}.txt`
+**Syntax:** `CMD("command")`
 
 **Example:**
 ```ron
 remaps: {
-    KC_BSPC: Password("work"),      // Types work password
-    KC_DEL: Password("personal"),   // Types personal password  
-    KC_HOME: Password("bank"),      // Types bank password
+    KC_F1: CMD("/usr/bin/notify-send 'Hello'"),
+    KC_F2: CMD("/usr/bin/playerctl play-pause"),
+    KC_F3: CMD("/usr/bin/brightnessctl set 10%+"),
 }
-
-// In layer
-layers: {
-    "passwords": (
-        remaps: {
-            KC_W: Password("work"),
-            KC_P: Password("personal"),
-            KC_B: Password("bank"),
-            KC_G: Password("github"),
-        },
-    ),
-}
-```
-
-**Setup:**
-```bash
-# Create password files (plain text, no quotes)
-echo "MyWorkPassword123!" > ~/.config/keyboard-middleware/password_work.txt
-echo "PersonalPass456" > ~/.config/keyboard-middleware/password_personal.txt
-chmod 600 ~/.config/keyboard-middleware/password_*.txt  # Secure them!
 ```
 
 **Features:**
-- **Instant typing**: All keys emitted in single batch (paste-like speed)
-- **Multiple passwords**: Separate file per identifier
-- **Double-tap for Enter**: Tap twice quickly → password + Enter key
-- **Secure storage**: Plain text files with restricted permissions
-
-**How it works:**
-1. Single tap → types entire password instantly
-2. Double-tap (within `double_tap_window_ms`) → types password + presses Enter
-3. Password loaded from `password_{id}.txt` at daemon start
-4. Hot-reload supported (restart daemon to reload passwords)
+- **Pure customizability**: Run any shell command
+- **Background execution**: Commands run in background thread
+- **System integration**: Control media, notifications, brightness, etc.
 
 **Use cases:**
-- Long secure passwords without password manager
-- Quick login to frequently used accounts
-- Two-factor backup codes
-- SSH passphrases
-- VPN credentials
+- Media controls (play/pause, volume, skip)
+- System commands (screenshot, lock, sleep)
+- Custom scripts and automation
+- Notification triggers
 
 ---
 
@@ -466,8 +436,8 @@ keyboard_overrides: {
    ├─ HR(tap, hold) → Permissive hold logic
    ├─ OVERLOAD(tap, hold) → Timing logic
    ├─ TO(layer) → Switch layer
-   ├─ Socd{} → SOCD resolution
-   └─ Password(id) → Type from file
+   ├─ SOCD() → SOCD resolution
+   └─ CMD(command) → Execute shell command
          ↓
 6. Virtual uinput Device
          ↓
@@ -595,42 +565,6 @@ State: W=false, S=false, Active=None
 
 ---
 
-#### Password Typing (Detailed)
-
-**Implementation:**
-```rust
-// Load password on daemon start
-let password = std::fs::read_to_string(
-    format!("~/.config/keyboard-middleware/password_{}.txt", id)
-)?;
-
-// On key press
-match action {
-    Password(id) => {
-        let is_double_tap = check_last_tap(&password_taps, id);
-        
-        if is_double_tap {
-            // Just press Enter
-            emit_key(KC_ENT);
-        } else {
-            // Type entire password as batch
-            let events = password_to_events(&password);
-            virtual_device.emit_all(events)?;  // Single syscall!
-        }
-        
-        password_taps.insert(id, Instant::now());
-    }
-}
-```
-
-**Optimizations:**
-- All key events batched into single `emit()` call
-- Instant typing (paste-like speed)
-- SYN events inserted for proper event boundaries
-- Shift keys handled correctly for capitals/symbols
-
----
-
 ### Configuration System
 
 #### RON Format
@@ -684,7 +618,6 @@ Example: 1234:5678:0100:0003:usb-0000:00:14.0-1/input0
 - All referenced layers exist
 - Key codes are valid
 - SOCD pairs are symmetric (if W→S, then S→W)
-- Password files exist and are readable
 - No circular layer references
 - Timing values are reasonable (> 0ms, < 1000ms)
 
@@ -719,9 +652,8 @@ Example: 1234:5678:0100:0003:usb-0000:00:14.0-1/input0
 1. **Generic layers** - Currently hardcoded to 5 enum variants, need String-based
 2. **Generic SOCD** - Currently hardcoded to WASD only, need config-driven
 3. **Generic HR mods** - Currently limited to ASDF JKL; keys, need any-key support
-4. **Password typer** - Broken or not working, needs fix + parameter support
-5. **Expanded KeyCode enum** - Only ~70 keys, need 150+ (media, numpad, etc.)
-6. **SOCD state management** - Hardcoded booleans, need dynamic HashMap-based
+4. **Expanded KeyCode enum** - Only ~70 keys, need 150+ (media, numpad, etc.)
+5. **SOCD state management** - Hardcoded booleans, need dynamic HashMap-based
 7. **HR mod double-tap tracking** - Fixed-size array, need HashMap
 8. **evdev ↔ KeyCode conversions** - Only covers basic keys, need all keys
 
@@ -795,7 +727,6 @@ pub enum Action {
     OVERLOAD(KeyCode, KeyCode),
     TO(Layer),
     Socd(KeyCode, KeyCode),  // ❌ Only works with WASD
-    Password,                 // ❌ No parameter, broken
 }
 ```
 
@@ -806,76 +737,25 @@ pub enum Action {
     HR(KeyCode, KeyCode),
     OVERLOAD(KeyCode, KeyCode),
     TO(Layer),
-    Socd { 
-        this_key: KeyCode, 
-        opposing_key: KeyCode 
-    },
-    Password(String),  // Parameter = file identifier
+    SOCD(KeyCode, Vec<KeyCode>),  // Stack-based last-input-priority
+    CMD(String),  // Execute shell command
 }
 ```
 
 **Files to modify:**
 - `src/config.rs` - Action enum definition (DONE)
-- `src/keymap.rs` - Update all pattern matches for Socd and Password
+- `src/keymap.rs` - Update all pattern matches for SOCD and CMD
 - `config.example.ron` - Update examples
 
 **Config format change:**
 ```ron
 // OLD
 KC_W: Socd(KC_W, KC_S),
-KC_BSPC: Password,
 
 // NEW  
-KC_W: Socd { this_key: KC_W, opposing_key: KC_S },
-KC_BSPC: Password("default"),
-KC_HOME: Password("work"),
+KC_W: SOCD(KC_W, [KC_S]),
+KC_F1: CMD("/usr/bin/notify-send 'Hello'"),
 ```
-
-#### 1.3 Password Loading (`config.rs`)
-
-**Current:**
-```rust
-impl Passwords {
-    pub fn load(path: &std::path::Path) -> anyhow::Result<Option<String>> {
-        // Loads single password.txt
-    }
-    
-    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
-        Ok(config_dir.join("keyboard-middleware").join("password.txt"))
-    }
-}
-```
-
-**Target:**
-```rust
-impl Passwords {
-    pub fn load(id: &str) -> anyhow::Result<Option<String>> {
-        let path = Self::path_for_id(id)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = std::fs::read_to_string(path)?;
-        let trimmed = content.trim();
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-        Ok(Some(trimmed.to_string()))
-    }
-    
-    pub fn path_for_id(id: &str) -> anyhow::Result<std::path::PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
-        Ok(config_dir
-            .join("keyboard-middleware")
-            .join(format!("password_{}.txt", id)))
-    }
-}
-```
-
-**Files to modify:**
-- `src/config.rs` - Passwords impl
-- `src/keymap.rs` - Update password loading logic
-- `src/main.rs` - Update set-password command to accept ID parameter
 
 ---
 
@@ -1297,128 +1177,6 @@ struct KeymapProcessor {
 
 ---
 
-### Phase 5: Password Typer Fix
-
-**Goal:** Make Password action take parameter and fix broken functionality
-
-#### 5.1 Update Password Loading (`keymap.rs`)
-
-**Current:**
-```rust
-pub fn new(config: &Config) -> Self {
-    let password = Passwords::default_path()
-        .ok()
-        .and_then(|path| Passwords::load(&path).ok())
-        .flatten();
-    
-    Self {
-        password,  // Single password
-        // ...
-    }
-}
-```
-
-**Target:**
-```rust
-pub fn new(config: &Config) -> Self {
-    // Extract all password IDs from config
-    let mut passwords = HashMap::new();
-    
-    for action in config.remaps.values() {
-        if let Action::Password(id) = action {
-            if let Ok(Some(pw)) = Passwords::load(id) {
-                passwords.insert(id.clone(), pw);
-            }
-        }
-    }
-    
-    // Also check layers and game_mode for passwords
-    // ...
-    
-    Self {
-        passwords,  // HashMap<String, String>
-        password_last_tap: HashMap::new(),  // Per-password ID
-        // ...
-    }
-}
-```
-
-**Files to modify:**
-- `src/keymap.rs` - Change `password: Option<String>` to `passwords: HashMap<String, String>`
-- `src/keymap.rs` - Update password processing logic to look up by ID
-
-#### 5.2 Fix Password Typing Logic
-
-**Debug checklist:**
-1. ✅ Password file loaded correctly?
-2. ✅ Password action matched in config?
-3. ✅ `TypeString` result generated?
-4. ✅ `type_string()` function called?
-5. ❌ Check if events are being emitted correctly
-
-**Current `type_string()` implementation:**
-```rust
-fn type_string(virtual_device: &mut VirtualDevice, text: &str, _add_enter: bool) -> Result<()> {
-    let mut events = Vec::with_capacity(text.len() * 8);
-    
-    for ch in text.chars() {
-        let (key, needs_shift) = char_to_key(ch);
-        
-        if let Some(key) = key {
-            if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 1));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            }
-            
-            events.push(InputEvent::new(EventType::KEY, key.code(), 1));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            
-            events.push(InputEvent::new(EventType::KEY, key.code(), 0));
-            events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            
-            if needs_shift {
-                events.push(InputEvent::new(EventType::KEY, Key::KEY_LEFTSHIFT.code(), 0));
-                events.push(InputEvent::new(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT));
-            }
-        }
-    }
-    
-    virtual_device.emit(&events)?;
-    Ok(())
-}
-```
-
-**Potential issue:** Events might need timestamps set. Try:
-```rust
-events.push(InputEvent::new_now(EventType::KEY, key.code(), 1));
-```
-
-**Files to modify:**
-- `src/event_processor.rs` - Change `InputEvent::new()` to `InputEvent::new_now()`
-- `src/keymap.rs` - Add debug logging for password actions
-
-#### 5.3 Update CLI Command (`main.rs`)
-
-**Current:**
-```rust
-Commands::SetPassword => {
-    // Saves to password.txt
-}
-```
-
-**Target:**
-```rust
-Commands::SetPassword { id } => {
-    // Saves to password_{id}.txt
-    println!("Setting password for ID: {}", id);
-    let path = Passwords::path_for_id(&id)?;
-    // ... save password ...
-}
-```
-
-**Files to modify:**
-- `src/main.rs` - Update set-password command to accept optional ID parameter
-
 ---
 
 ### Phase 6: Directory Restructure
@@ -1437,7 +1195,7 @@ src/
 │   ├── homerow_mods.rs     # HR mod logic (extracted from keymap.rs)
 │   ├── overload.rs         # OVERLOAD logic (extracted from keymap.rs)
 │   ├── socd.rs             # SOCD logic (extracted from keymap.rs)
-│   ├── password.rs         # Password typing logic
+│   ├── command.rs          # Command execution logic
 │   ├── conversions.rs      # evdev ↔ KeyCode conversions (800+ lines)
 │   └── virtual_device.rs   # Virtual device creation and typing
 ├── config.rs               # Config types
@@ -1460,7 +1218,7 @@ mod actions;
 mod homerow_mods;
 mod overload;
 mod socd;
-mod password;
+mod command;
 mod conversions;
 mod virtual_device;
 
@@ -1501,19 +1259,20 @@ pub use conversions::{evdev_to_keycode, keycode_to_evdev};
 - LIP algorithm
 - Extracted from keymap.rs (~150 lines)
 
-**`event_processor/password.rs`:**
+**`event_processor/command.rs`:**
 ```rust
-pub struct PasswordManager {
-    passwords: HashMap<String, String>,
-    last_tap: HashMap<String, Instant>,
-    double_tap_window_ms: u32,
-}
+pub struct CommandRunner;
 
-impl PasswordManager {
-    pub fn new(config: &Config, double_tap_window_ms: u32) -> Self { ... }
-    
-    pub fn process_password_action(
-        &mut self, 
+impl CommandRunner {
+    pub fn execute(command: &str) {
+        std::thread::spawn(move || {
+            let _ = std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(command)
+                .spawn();
+        });
+    }
+} 
         id: &str
     ) -> ProcessResult { ... }
 }
@@ -1547,7 +1306,7 @@ impl PasswordManager {
 - Layer lookup resolution
 - SOCD pair resolution for various inputs
 - HR mod permissive hold
-- Password loading and typing
+- Command execution
 - KeyCode conversions (all 150 keys)
 
 **Test files to create:**
@@ -1556,7 +1315,7 @@ tests/
 ├── layer_tests.rs
 ├── socd_tests.rs
 ├── homerow_mod_tests.rs
-├── password_tests.rs
+├── command_tests.rs
 └── conversion_tests.rs
 ```
 
@@ -1565,18 +1324,17 @@ tests/
 **Test scenarios:**
 1. Load config with custom layers
 2. Press keys in various layers
-3. Test SOCD with arrow keys
+3. Test SOCD with arrow keys and multiple opposing keys
 4. Test HR mods on non-home-row keys
-5. Test multiple passwords
+5. Test command execution
 6. Test all media/numpad keys
 
 #### 7.3 Migration Guide
 
 **Breaking changes for users:**
 1. Layer names change from `L_NAV` to `"nav"`
-2. SOCD syntax changes from `Socd(A, B)` to `Socd { this_key: A, opposing_key: B }`
-3. Password action changes from `Password` to `Password("id")`
-4. Password file changes from `password.txt` to `password_{id}.txt`
+2. SOCD syntax changes to stack-based: `SOCD(key, [opposing_keys...])`
+3. Password action replaced with `CMD()` for arbitrary commands
 
 **Create migration script:**
 ```bash
@@ -1595,9 +1353,8 @@ sed -i 's/L_NUM/"num"/g' config.ron
 ### Priority 1 (Core Functionality) - Do First
 
 1. ✅ **Layer system refactor** - Most impactful for customization
-2. ✅ **Action type updates** - Required for SOCD and Password
-3. ✅ **Password parameter support** - Fixes broken feature
-4. **Password typer debug/fix** - Make it actually work
+2. ✅ **Action type updates** - Required for SOCD and CMD
+3. ✅ **Command runner** - Execute arbitrary shell commands
 
 ### Priority 2 (Expand Capabilities) - Do Second
 

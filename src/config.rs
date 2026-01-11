@@ -1,3 +1,4 @@
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -216,16 +217,13 @@ pub enum Action {
     /// Switch to layer
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
-    /// Format: Socd { this_key, opposing_key }
-    /// Example: Socd { this_key: KC_W, opposing_key: KC_S }
-    Socd {
-        this_key: KeyCode,
-        opposing_key: KeyCode,
-    },
-    /// Type password from file (parameter is the identifier for the password file)
-    /// File path: ~/.config/keyboard-middleware/password_{id}.txt
-    /// Use Password("default") for ~/.config/keyboard-middleware/password_default.txt
-    Password(String),
+    /// When this key is pressed, unpress all opposing keys
+    /// Format: SOCD(this_key, [opposing_keys...])
+    /// Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
+    SOCD(KeyCode, Vec<KeyCode>),
+    /// Run arbitrary shell command
+    /// Example: CMD("/usr/bin/notify-send 'Hello'")
+    CMD(String),
 }
 
 /// Game mode detection methods
@@ -291,47 +289,6 @@ pub struct KeymapOverride {
 pub struct SettingsOverride {
     pub tapping_term_ms: Option<u32>,
     pub double_tap_window_ms: Option<u32>,
-}
-
-/// Password configuration (stored separately for security)
-pub struct Passwords;
-
-impl Passwords {
-    /// Load password from separate file by ID (just plain text, no RON)
-    #[allow(clippy::missing_errors_doc)]
-    pub fn load(id: &str) -> anyhow::Result<Option<String>> {
-        let path = Self::path_for_id(id)?;
-
-        if !path.exists() {
-            return Ok(None);
-        }
-
-        let content = std::fs::read_to_string(path)?;
-        let trimmed = content.trim();
-
-        // If file is empty, treat as no password
-        if trimmed.is_empty() {
-            return Ok(None);
-        }
-
-        Ok(Some(trimmed.to_string()))
-    }
-
-    /// Get password file path for a specific ID
-    #[allow(clippy::missing_errors_doc)]
-    pub fn path_for_id(id: &str) -> anyhow::Result<std::path::PathBuf> {
-        let config_dir =
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
-        Ok(config_dir
-            .join("keyboard-middleware")
-            .join(format!("password_{}.txt", id)))
-    }
-
-    /// Get default password file path (for backward compatibility)
-    #[allow(clippy::missing_errors_doc)]
-    pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
-        Self::path_for_id("default")
-    }
 }
 
 /// Main configuration structure
@@ -407,9 +364,222 @@ impl Config {
 
     /// Save only `enabled_keyboards` field, preserving rest of file
     #[allow(clippy::missing_errors_doc)]
+    /// Save only the enabled_keyboards field, preserving all other formatting
     pub fn save_enabled_keyboards_only(&self, path: &std::path::Path) -> anyhow::Result<()> {
-        // Just use the working save() method - no need for complex text surgery
-        // The original implementation had an off-by-one error that corrupted configs
-        self.save(path)
+        // Read the original file
+        let content = std::fs::read_to_string(path)?;
+
+        // Find the enabled_keyboards field
+        let start_marker = "enabled_keyboards:";
+
+        if let Some(start_pos) = content.find(start_marker) {
+            // Find where the field starts (after the colon)
+            let field_start = start_pos + start_marker.len();
+
+            // Find the end of this field (next field or closing paren)
+            let remaining = &content[field_start..];
+
+            // Find the end by looking for comma at the end of the value
+            let mut end_pos = field_start;
+            let mut depth = 0;
+            let mut in_string = false;
+            let mut found_value_start = false;
+
+            for (i, ch) in remaining.chars().enumerate() {
+                match ch {
+                    '"' if i == 0
+                        || remaining.as_bytes().get(i.wrapping_sub(1)) != Some(&b'\\') =>
+                    {
+                        in_string = !in_string;
+                    }
+                    '[' if !in_string => {
+                        depth += 1;
+                        found_value_start = true;
+                    }
+                    ']' if !in_string => {
+                        depth -= 1;
+                        if depth == 0 && found_value_start {
+                            // Found the end of the array
+                            end_pos = field_start + i + 1;
+                            break;
+                        }
+                    }
+                    'N' if !in_string
+                        && !found_value_start
+                        && remaining[i..].starts_with("None") =>
+                    {
+                        end_pos = field_start + i + 4;
+                        break;
+                    }
+                    'S' if !in_string
+                        && !found_value_start
+                        && remaining[i..].starts_with("Some") =>
+                    {
+                        found_value_start = true;
+                    }
+                    '(' if !in_string && found_value_start => depth += 1,
+                    ')' if !in_string && found_value_start => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end_pos = field_start + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if end_pos == field_start {
+                // Couldn't parse, fall back to full save
+                return self.save(path);
+            }
+
+            // Generate the new value
+            let new_value = if let Some(ref keyboards) = self.enabled_keyboards {
+                if keyboards.is_empty() {
+                    " Some([])".to_string()
+                } else {
+                    let mut result = " Some([\n".to_string();
+                    for kbd in keyboards {
+                        result.push_str(&format!("        \"{}\",\n", kbd));
+                    }
+                    result.push_str("    ])");
+                    result
+                }
+            } else {
+                " None".to_string()
+            };
+
+            // Build the new content
+            let new_content = format!(
+                "{}{}{}",
+                &content[..field_start],
+                new_value,
+                &content[end_pos..]
+            );
+
+            // Write it back
+            std::fs::write(path, new_content)?;
+            Ok(())
+        } else {
+            // enabled_keyboards field not found, fall back to full save
+            self.save(path)
+        }
+    }
+
+    /// Validate config without printing - returns errors as a Vec<String>
+    pub fn validate_silent(&self) -> Result<()> {
+        use std::collections::{HashMap, HashSet};
+
+        let mut errors: Vec<String> = Vec::new();
+
+        // Validation 1: Check SOCD pairs are symmetric
+        let mut socd_map: HashMap<KeyCode, KeyCode> = HashMap::new();
+
+        let mut extract_socd = |remaps: &HashMap<KeyCode, Action>| {
+            let mut pairs = Vec::new();
+            for (key, action) in remaps {
+                if let Action::SOCD(this_key, opposing_keys) = action {
+                    if key != this_key {
+                        errors.push(format!(
+                            "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
+                            key, this_key
+                        ));
+                    }
+                    for opposing_key in opposing_keys {
+                        pairs.push((*this_key, *opposing_key));
+                    }
+                }
+            }
+            pairs
+        };
+
+        for (key1, key2) in extract_socd(&self.remaps) {
+            socd_map.insert(key1, key2);
+        }
+        for layer_config in self.layers.values() {
+            for (key1, key2) in extract_socd(&layer_config.remaps) {
+                socd_map.insert(key1, key2);
+            }
+        }
+        for (key1, key2) in extract_socd(&self.game_mode.remaps) {
+            socd_map.insert(key1, key2);
+        }
+
+        // Check symmetry
+        let mut socd_checked = HashSet::new();
+        for (key1, key2) in &socd_map {
+            if socd_checked.contains(key1) {
+                continue;
+            }
+            if let Some(reverse) = socd_map.get(key2) {
+                if reverse != key1 {
+                    errors.push(format!(
+                        "SOCD pair asymmetric: {:?} → {:?}, but {:?} → {:?}",
+                        key1, key2, key2, reverse
+                    ));
+                }
+                socd_checked.insert(*key1);
+                socd_checked.insert(*key2);
+            } else {
+                errors.push(format!(
+                    "SOCD missing reverse pair: {:?} → {:?}, but {:?} not defined",
+                    key1, key2, key2
+                ));
+            }
+        }
+
+        // Validation 2: Check timing values are reasonable
+        if self.tapping_term_ms == 0 || self.tapping_term_ms > 1000 {
+            errors.push(format!(
+                "tapping_term_ms out of reasonable range (0-1000): {}",
+                self.tapping_term_ms
+            ));
+        }
+        if let Some(window) = self.double_tap_window_ms {
+            if window == 0 || window > 1000 {
+                errors.push(format!(
+                    "double_tap_window_ms out of reasonable range (0-1000): {}",
+                    window
+                ));
+            }
+        }
+
+        // Validation 3: Check layer references
+        let mut referenced_layers = HashSet::new();
+
+        let extract_layer_refs = |remaps: &HashMap<KeyCode, Action>| {
+            let mut refs = Vec::new();
+            for action in remaps.values() {
+                if let Action::TO(layer) = action {
+                    refs.push(layer.0.clone());
+                }
+            }
+            refs
+        };
+
+        for layer_name in extract_layer_refs(&self.remaps) {
+            referenced_layers.insert(layer_name);
+        }
+        for layer_config in self.layers.values() {
+            for layer_name in extract_layer_refs(&layer_config.remaps) {
+                referenced_layers.insert(layer_name);
+            }
+        }
+
+        for layer_name in &referenced_layers {
+            if layer_name != "base" && !self.layers.contains_key(&Layer(layer_name.clone())) {
+                errors.push(format!("Referenced layer not defined: \"{}\"", layer_name));
+            }
+        }
+
+        if !errors.is_empty() {
+            Err(anyhow::anyhow!(
+                "Config validation failed: {}",
+                errors.join("; ")
+            ))
+        } else {
+            Ok(())
+        }
     }
 }

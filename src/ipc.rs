@@ -21,6 +21,8 @@ pub enum IpcRequest {
     DisableKeyboard(String),
     /// Set game mode state (true = on, false = off)
     SetGameMode(bool),
+    /// Reload configuration from disk
+    Reload,
     /// Shutdown daemon
     Shutdown,
 }

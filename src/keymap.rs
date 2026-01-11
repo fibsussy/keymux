@@ -2,7 +2,7 @@ use evdev::Key;
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
-use crate::config::{Action as ConfigAction, Config, KeyCode, Layer, Passwords};
+use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
@@ -27,12 +27,13 @@ enum KeyAction {
 
 /// SOCD pair tracking
 #[derive(Debug, Clone)]
-struct SocdPair {
-    this_key: KeyCode,
-    opposing_key: KeyCode,
-    this_held: bool,
-    opposing_held: bool,
-    last_input: KeyCode,
+/// SOCD group configuration
+struct SocdGroup {
+    /// All keys in this SOCD group
+    all_keys: Vec<KeyCode>,
+    /// Stack of currently held keys (most recent at the end)
+    held_stack: Vec<KeyCode>,
+    /// Currently active (emitted) key
     active_key: Option<KeyCode>,
 }
 
@@ -65,13 +66,10 @@ pub struct KeymapProcessor {
     /// Which OVERLOAD keys are pending (awaiting tap/hold decision)
     pending_overload: HashSet<KeyCode>,
 
-    /// SOCD state tracking - now generic, supports any opposing pairs
-    socd_pairs: HashMap<KeyCode, SocdPair>,
-
-    /// Passwords from config - supports multiple passwords by ID
-    passwords: HashMap<String, String>,
-    /// Last tap time per password ID
-    password_last_tap: HashMap<String, Instant>,
+    /// SOCD state tracking - maps each key to its group ID
+    socd_key_to_group: HashMap<KeyCode, usize>,
+    /// SOCD groups by ID
+    socd_groups: Vec<SocdGroup>,
 }
 
 impl KeymapProcessor {
@@ -83,104 +81,45 @@ impl KeymapProcessor {
             layers.insert(layer.clone(), layer_config.remaps.clone());
         }
 
-        // Load all passwords referenced in config
-        let mut passwords = HashMap::new();
+        // Build SOCD groups from config
+        // First, collect all SOCD definitions
+        let mut socd_definitions: HashMap<KeyCode, Vec<KeyCode>> = HashMap::new();
 
-        // Helper to extract password IDs from actions
-        let extract_password_ids = |remaps: &HashMap<KeyCode, ConfigAction>| {
-            let mut ids = Vec::new();
-            for (_key, action) in remaps {
-                if let ConfigAction::Password(id) = action {
-                    ids.push(id.clone());
+        let extract_socd = |remaps: &HashMap<KeyCode, ConfigAction>,
+                            defs: &mut HashMap<KeyCode, Vec<KeyCode>>| {
+            for (_keycode, action) in remaps {
+                if let ConfigAction::SOCD(this_key, opposing_keys) = action {
+                    defs.insert(*this_key, opposing_keys.clone());
                 }
             }
-            ids
         };
 
-        // Extract from base remaps
-        for id in extract_password_ids(&config.remaps) {
-            if let Ok(Some(pw)) = Passwords::load(&id) {
-                passwords.insert(id, pw);
-            }
-        }
-
-        // Extract from all layers
+        extract_socd(&config.remaps, &mut socd_definitions);
         for layer_config in config.layers.values() {
-            for id in extract_password_ids(&layer_config.remaps) {
-                if let Ok(Some(pw)) = Passwords::load(&id) {
-                    passwords.insert(id, pw);
-                }
-            }
+            extract_socd(&layer_config.remaps, &mut socd_definitions);
         }
+        extract_socd(&config.game_mode.remaps, &mut socd_definitions);
 
-        // Extract from game mode
-        for id in extract_password_ids(&config.game_mode.remaps) {
-            if let Ok(Some(pw)) = Passwords::load(&id) {
-                passwords.insert(id, pw);
+        // Build groups: each key + its opposing keys form a group
+        let mut socd_groups = Vec::new();
+        let mut socd_key_to_group = HashMap::new();
+
+        for (this_key, opposing_keys) in socd_definitions {
+            // Build the full group: this_key + all opposing_keys
+            let mut all_keys = vec![this_key];
+            all_keys.extend(opposing_keys);
+
+            let group_id = socd_groups.len();
+            socd_groups.push(SocdGroup {
+                all_keys: all_keys.clone(),
+                held_stack: Vec::new(),
+                active_key: None,
+            });
+
+            // Map each key in the group to this group ID
+            for key in all_keys {
+                socd_key_to_group.insert(key, group_id);
             }
-        }
-
-        // Build SOCD pairs from config
-        let mut socd_pairs = HashMap::new();
-
-        // Helper to extract SOCD pairs
-        let extract_socd_pairs = |remaps: &HashMap<KeyCode, ConfigAction>| {
-            let mut pairs = Vec::new();
-            for (keycode, action) in remaps {
-                if let ConfigAction::Socd {
-                    this_key,
-                    opposing_key,
-                } = action
-                {
-                    pairs.push((*this_key, *opposing_key));
-                }
-            }
-            pairs
-        };
-
-        // Extract from all remaps (base + layers + game_mode)
-        for (this_key, opposing_key) in extract_socd_pairs(&config.remaps) {
-            socd_pairs.insert(
-                this_key,
-                SocdPair {
-                    this_key,
-                    opposing_key,
-                    this_held: false,
-                    opposing_held: false,
-                    last_input: this_key,
-                    active_key: None,
-                },
-            );
-        }
-
-        for layer_config in config.layers.values() {
-            for (this_key, opposing_key) in extract_socd_pairs(&layer_config.remaps) {
-                socd_pairs.insert(
-                    this_key,
-                    SocdPair {
-                        this_key,
-                        opposing_key,
-                        this_held: false,
-                        opposing_held: false,
-                        last_input: this_key,
-                        active_key: None,
-                    },
-                );
-            }
-        }
-
-        for (this_key, opposing_key) in extract_socd_pairs(&config.game_mode.remaps) {
-            socd_pairs.insert(
-                this_key,
-                SocdPair {
-                    this_key,
-                    opposing_key,
-                    this_held: false,
-                    opposing_held: false,
-                    last_input: this_key,
-                    active_key: None,
-                },
-            );
         }
 
         Self {
@@ -196,15 +135,19 @@ impl KeymapProcessor {
             tapping_term_ms: config.tapping_term_ms,
             overload_press_times: HashMap::new(),
             pending_overload: HashSet::new(),
-            socd_pairs,
-            passwords,
-            password_last_tap: HashMap::new(),
+            socd_key_to_group,
+            socd_groups,
         }
     }
 
     /// Set game mode state
     pub const fn set_game_mode(&mut self, active: bool) {
         self.game_mode_active = active;
+    }
+
+    /// Get all currently held keys (for graceful shutdown)
+    pub fn get_held_keys(&self) -> Vec<KeyCode> {
+        self.held_keys.keys().copied().collect()
     }
 
     /// Process a key event
@@ -346,36 +289,15 @@ impl KeymapProcessor {
                     }
                 }
             }
-            Some(ConfigAction::Socd {
-                this_key,
-                opposing_key: _,
-            }) => {
+            Some(ConfigAction::SOCD(this_key, _opposing_keys)) => {
                 // SOCD handling
                 actions.push(KeyAction::SocdManaged);
                 self.held_keys.insert(keycode, actions);
                 self.apply_socd_to_key_press(this_key)
             }
-            Some(ConfigAction::Password(id)) => {
-                // Password typer with double-tap for Enter only
-                let is_double_tap = if let Some(last_tap) = self.password_last_tap.get(&id) {
-                    let elapsed = Instant::now().duration_since(*last_tap).as_millis() as u32;
-                    elapsed < self.double_tap_window_ms
-                } else {
-                    false
-                };
-                self.password_last_tap.insert(id.clone(), Instant::now());
-
-                if is_double_tap {
-                    // Second tap: just press Enter
-                    ProcessResult::TapKeyPressRelease(KeyCode::KC_ENT)
-                } else {
-                    // First tap: type password
-                    self.passwords
-                        .get(&id)
-                        .map_or(ProcessResult::None, |password| {
-                            ProcessResult::TypeString(password.clone(), false)
-                        })
-                }
+            Some(ConfigAction::CMD(command)) => {
+                // Run arbitrary command
+                ProcessResult::RunCommand(command.clone())
             }
             None => {
                 // No remap - check if modifiers are pending (permissive hold)
@@ -577,34 +499,21 @@ impl KeymapProcessor {
 
     // === SOCD Helpers (Generic) ===
 
-    /// Apply SOCD key press - compute new active keys and return events to emit
+    /// Apply SOCD key press - uses stack-based last-input-priority
     fn apply_socd_to_key_press(&mut self, keycode: KeyCode) -> ProcessResult {
-        // Find the SOCD pair for this key
-        if let Some(pair) = self.socd_pairs.get_mut(&keycode) {
-            let old_active = pair.active_key;
+        // Find which SOCD group this key belongs to
+        if let Some(&group_id) = self.socd_key_to_group.get(&keycode) {
+            let group = &mut self.socd_groups[group_id];
+            let old_active = group.active_key;
 
-            // Update state
-            if keycode == pair.this_key {
-                pair.this_held = true;
-                pair.last_input = pair.this_key;
-            } else if keycode == pair.opposing_key {
-                pair.opposing_held = true;
-                pair.last_input = pair.opposing_key;
+            // Add this key to the held stack (most recent at the end)
+            if !group.held_stack.contains(&keycode) {
+                group.held_stack.push(keycode);
             }
 
-            // Compute new active key (Last Input Priority)
-            let new_active = if pair.this_held && !pair.opposing_held {
-                Some(pair.this_key)
-            } else if pair.opposing_held && !pair.this_held {
-                Some(pair.opposing_key)
-            } else if pair.this_held && pair.opposing_held {
-                // Both held: last input wins
-                Some(pair.last_input)
-            } else {
-                None
-            };
-
-            pair.active_key = new_active;
+            // The most recent key becomes active
+            let new_active = group.held_stack.last().copied();
+            group.active_key = new_active;
 
             // Generate transition events
             self.generate_socd_transition(old_active, new_active)
@@ -613,32 +522,19 @@ impl KeymapProcessor {
         }
     }
 
-    /// Apply SOCD key release - compute new active keys and return events to emit
+    /// Apply SOCD key release - activates the previous key in stack
     fn apply_socd_to_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
-        // Find the SOCD pair for this key
-        if let Some(pair) = self.socd_pairs.get_mut(&keycode) {
-            let old_active = pair.active_key;
+        // Find which SOCD group this key belongs to
+        if let Some(&group_id) = self.socd_key_to_group.get(&keycode) {
+            let group = &mut self.socd_groups[group_id];
+            let old_active = group.active_key;
 
-            // Update state
-            if keycode == pair.this_key {
-                pair.this_held = false;
-            } else if keycode == pair.opposing_key {
-                pair.opposing_held = false;
-            }
+            // Remove this key from the held stack
+            group.held_stack.retain(|&k| k != keycode);
 
-            // Compute new active key
-            let new_active = if pair.this_held && !pair.opposing_held {
-                Some(pair.this_key)
-            } else if pair.opposing_held && !pair.this_held {
-                Some(pair.opposing_key)
-            } else if pair.this_held && pair.opposing_held {
-                // Both still held: keep last input
-                Some(pair.last_input)
-            } else {
-                None
-            };
-
-            pair.active_key = new_active;
+            // The most recent remaining key becomes active (or None if stack is empty)
+            let new_active = group.held_stack.last().copied();
+            group.active_key = new_active;
 
             // Generate transition events
             self.generate_socd_transition(old_active, new_active)
@@ -687,6 +583,8 @@ pub enum ProcessResult {
     MultipleEvents(Vec<(KeyCode, bool)>),
     /// Type a string
     TypeString(String, bool),
+    /// Run a shell command
+    RunCommand(String),
     /// Don't emit anything
     None,
 }

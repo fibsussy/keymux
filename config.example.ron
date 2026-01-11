@@ -1,8 +1,7 @@
 // Keyboard Middleware Configuration Example
 // Copy this to ~/.config/keyboard-middleware/config.ron and customize
 //
-// Note: Passwords are stored separately in ~/.config/keyboard-middleware/password_{id}.txt
-// Just create that file with your password as plain text (no quotes, no formatting)
+// Note: Use CMD() action to run arbitrary shell commands on key press
 
 (
     // ============================================================================
@@ -14,7 +13,7 @@
     // Recommended: 130-200ms for home row mods
     tapping_term_ms: 130,
 
-    // Window (in ms) for detecting double-taps (e.g., for Password action)
+    // Window (in ms) for detecting double-taps
     // Set to None to disable double-tap detection, or Some(300) for 300ms window
     double_tap_window_ms: None,
 
@@ -86,8 +85,8 @@
         //         KC_K: Key(KC_UP),
         //         KC_L: Key(KC_RGHT),
         //
-        //         // Type password (double-tap to add Enter)
-        //         KC_BSPC: Password("default"),
+        //         // Run custom command
+        //         KC_BSPC: CMD("/usr/bin/notify-send 'Hello from keyboard!'"),
         //     },
         // ),
 
@@ -132,19 +131,19 @@
             // Uses last-input-priority: pressing W then S = S, release S = W again
             
             // WASD movement (traditional FPS)
-            // KC_W: Socd { this_key: KC_W, opposing_key: KC_S },
-            // KC_S: Socd { this_key: KC_S, opposing_key: KC_W },
-            // KC_A: Socd { this_key: KC_A, opposing_key: KC_D },
-            // KC_D: Socd { this_key: KC_D, opposing_key: KC_A },
+            // KC_W: SOCD(KC_W, [KC_S]),
+            // KC_S: SOCD(KC_S, [KC_W]),
+            // KC_A: SOCD(KC_A, [KC_D]),
+            // KC_D: SOCD(KC_D, [KC_A]),
 
-            // Arrow keys (for racing games!)
-            // KC_UP: Socd { this_key: KC_UP, opposing_key: KC_DOWN },
-            // KC_DOWN: Socd { this_key: KC_DOWN, opposing_key: KC_UP },
-            // KC_LEFT: Socd { this_key: KC_LEFT, opposing_key: KC_RGHT },
-            // KC_RGHT: Socd { this_key: KC_RGHT, opposing_key: KC_LEFT },
+            // For arrow keys (can coexist with WASD SOCD):
+            // KC_UP: SOCD(KC_UP, [KC_DOWN]),
+            // KC_DOWN: SOCD(KC_DOWN, [KC_UP]),
+            // KC_LEFT: SOCD(KC_LEFT, [KC_RGHT]),
+            // KC_RGHT: SOCD(KC_RGHT, [KC_LEFT]),
 
-            // Custom bindings work too!
-            // KC_I: Socd { this_key: KC_I, opposing_key: KC_K },
+            // For complex multi-directional SOCD (e.g., unpress multiple keys):
+            // KC_W: SOCD(KC_W, [KC_S, KC_DOWN]),  // W cancels both S and DOWN
         },
     ),
 
@@ -189,18 +188,20 @@
 //    - Use any string as layer name: "nav", "coding", "media", etc.
 //    - No more limited to 5 predefined layers!
 //
-// 2. GENERIC SOCD
+// 2. GENERIC SOCD (Last-Input-Priority with Stack)
 //    - Works with ANY opposing pairs (WASD, arrows, custom binds)
-//    - New syntax: Socd { this_key: KC_X, opposing_key: KC_Y }
+//    - Tracks all held keys, only emits the most recent
+//    - New syntax: SOCD(key, [opposing_keys...])
+//    - Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
 //
 // 3. HR MODS ON ANY KEY
 //    - No longer limited to ASDF JKL; keys
 //    - Use HR() on literally any key you want!
 //
-// 4. MULTIPLE PASSWORDS
-//    - New syntax: Password("id")
-//    - Store multiple passwords: password_work.txt, password_personal.txt, etc.
-//    - Create files: ~/.config/keyboard-middleware/password_{id}.txt
+// 4. COMMAND RUNNER
+//    - New syntax: CMD("/path/to/command with args")
+//    - Run any shell command on key press
+//    - Example: CMD("/usr/bin/notify-send 'Hello'")
 //
 // 5. 150+ KEYS SUPPORTED
 //    - All F-keys (F1-F24)

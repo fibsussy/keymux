@@ -10,7 +10,7 @@
 - **Custom Layers**: Define unlimited layers (navigation, numpad, symbols, etc.)
 - **Game Mode**: Automatic detection via Steam/Gamescope with SOCD support
 - **SOCD Cleaner**: Last-input-priority for FPS games (eliminates W+S conflicts)
-- **Password Typer**: Securely type passwords with a dedicated key (double-tap adds Enter)
+- **Command Runner**: Execute arbitrary shell commands on key press
 - **Per-Keyboard Configs**: Different keymaps for different keyboards
 - **Hot-Reload**: Automatic config reload on file save with desktop notifications
 
@@ -41,7 +41,7 @@
 | **Home Row Mods** | Permissive hold + OVERLOAD | Tap-hold with delays | ⚡ keyboard-middleware |
 | **Game Mode** | Automatic Steam/Gamescope detection | Manual toggle | ⚡ keyboard-middleware |
 | **SOCD** | Built-in last-input-priority | Not available | ⚡ keyboard-middleware |
-| **Password Manager** | Encrypted password typer | Not available | ⚡ keyboard-middleware |
+| **Command Runner** | Execute shell commands on keypress | Not available | ⚡ keyboard-middleware |
 | **Per-Key Timing** | Per-action timing possible | Global timing | ⚡ keyboard-middleware |
 | **Shell Completions** | Built-in (bash/zsh/fish) | Manual setup | ⚡ keyboard-middleware |
 | **Community** | New project | Mature, large community | ✨ kmonad |
@@ -70,7 +70,7 @@
 - Auto hot-reload (edit config, save, done)
 - Automatic game mode detection
 - Desktop notifications for config errors
-- Built-in password typer
+- Shell command execution on key press
 
 ### Why kmonad?
 
@@ -175,16 +175,7 @@ $EDITOR ~/.config/keyboard-middleware/config.ron
 keyboard-middleware toggle
 ```
 
-4. **(Optional) Set up password typer:**
-```bash
-# Create password file (plain text, one line)
-echo "YourSecurePassword123" > ~/.config/keyboard-middleware/password.txt
-chmod 600 ~/.config/keyboard-middleware/password.txt
-
-# Then configure a key to use Action::Password in config.ron
-```
-
-5. **(Optional) Shell completions:**
+4. **(Optional) Shell completions:**
 ```bash
 # Bash
 keyboard-middleware completion bash | sudo tee /usr/share/bash-completion/completions/keyboard-middleware
@@ -258,10 +249,11 @@ SOCD cleaner for gaming (last-input-priority).
 KC_W: Socd(KC_W, KC_S),  // Pressing W then S = S, release S = W again
 ```
 
-#### Password
-Type password from `~/.config/keyboard-middleware/password.txt`.
+#### CMD (Command Runner)
+Execute arbitrary shell commands on key press.
 ```ron
-KC_BSPC: Password,  // First press types password, second press adds Enter
+KC_F1: CMD("/usr/bin/notify-send 'Hello from keyboard!'"),
+KC_F2: CMD("/usr/bin/playerctl play-pause"),
 ```
 
 ### Example Configurations
@@ -338,8 +330,8 @@ KC_BSPC: Password,  // First press types password, second press adds Enter
                 KC_K: Key(KC_UP),
                 KC_L: Key(KC_RGHT),
 
-                // Password typer
-                KC_BSPC: Password,
+                // Command runner
+                KC_BSPC: CMD("/usr/bin/notify-send 'Nav layer active'"),
             },
         ),
     },
@@ -436,13 +428,6 @@ keyboard-middleware list
 keyboard-middleware toggle
 
 # Config hot-reloads automatically on save - no restart needed!
-```
-
-### Password Management
-
-```bash
-# Set password interactively (stored in password.txt)
-keyboard-middleware set-password
 ```
 
 ### Shell Completions

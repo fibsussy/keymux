@@ -79,8 +79,8 @@ fn run_event_processor(
         match shutdown_rx.try_recv() {
             Ok(()) => {
                 warn!("Shutdown signal received for: {}", keyboard_name);
-                // Release all held keys before exiting
-                release_all_keys(&mut virtual_device);
+                // Release all held keys before exiting (graceful shutdown)
+                release_all_keys(&mut virtual_device, &keymap);
                 // Ungrab device before exiting
                 let _ = device.ungrab();
                 info!("Device ungrabbed and released for: {}", keyboard_name);
@@ -88,7 +88,8 @@ fn run_event_processor(
             }
             Err(crossbeam_channel::TryRecvError::Disconnected) => {
                 warn!("Shutdown channel disconnected for: {}", keyboard_name);
-                release_all_keys(&mut virtual_device);
+                // Release all held keys before exiting (graceful shutdown)
+                release_all_keys(&mut virtual_device, &keymap);
                 let _ = device.ungrab();
                 return Ok(());
             }
@@ -176,6 +177,15 @@ fn run_event_processor(
                                         std::thread::sleep(std::time::Duration::from_millis(2));
                                     }
                                 }
+                                ProcessResult::RunCommand(command) => {
+                                    // Run shell command in background
+                                    std::thread::spawn(move || {
+                                        let _ = std::process::Command::new("/bin/sh")
+                                            .arg("-c")
+                                            .arg(&command)
+                                            .spawn();
+                                    });
+                                }
                                 ProcessResult::None => {
                                     // Don't emit anything (consumed by layer switch, etc.)
                                 }
@@ -223,10 +233,31 @@ fn create_virtual_device(physical_device: &Device, keyboard_name: &str) -> Resul
 }
 
 /// Release all potentially held keys before shutdown
-fn release_all_keys(virtual_device: &mut VirtualDevice) {
+fn release_all_keys(virtual_device: &mut VirtualDevice, keymap: &KeymapProcessor) {
     use evdev::InputEvent;
 
-    // Release all modifier keys
+    // Get all keys that the keymap thinks are held
+    let held_keys = keymap.get_held_keys();
+
+    if !held_keys.is_empty() {
+        info!(
+            "Gracefully releasing {} held key(s) before shutdown",
+            held_keys.len()
+        );
+
+        // Release all held keys
+        for keycode in held_keys {
+            let evdev_key = keycode_to_evdev(keycode);
+            let event = InputEvent::new_now(EventType::KEY, evdev_key.code(), 0);
+            let _ = virtual_device.emit(&[event]);
+        }
+
+        // Send SYN_REPORT
+        let syn_event = InputEvent::new_now(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT);
+        let _ = virtual_device.emit(&[syn_event]);
+    }
+
+    // Also release common modifiers as a safety measure
     let modifiers = [
         Key::KEY_LEFTCTRL,
         Key::KEY_RIGHTCTRL,
@@ -243,7 +274,7 @@ fn release_all_keys(virtual_device: &mut VirtualDevice) {
         let _ = virtual_device.emit(&[event]);
     }
 
-    // Send SYN_REPORT
+    // Send final SYN_REPORT
     let syn_event = InputEvent::new_now(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT);
     let _ = virtual_device.emit(&[syn_event]);
 }

@@ -10,7 +10,7 @@ use crate::session_manager::SessionManager;
 use anyhow::{Context, Result};
 
 use evdev::Device;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::unix::net::UnixListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -49,6 +49,8 @@ pub struct AsyncDaemon {
     keyboard_owners: HashMap<KeyboardId, u32>,
     /// Current game mode state (preserved across thread restarts)
     game_mode_active: bool,
+    /// Last config reload time for debouncing
+    last_config_reload: Option<std::time::Instant>,
 }
 
 impl AsyncDaemon {
@@ -73,6 +75,7 @@ impl AsyncDaemon {
             active_processors: HashMap::new(),
             keyboard_owners: HashMap::new(),
             game_mode_active: false,
+            last_config_reload: None,
         })
     }
 
@@ -85,6 +88,7 @@ impl AsyncDaemon {
         let hotplug_rx = self.start_hotplug_monitor();
         let ipc_rx = self.start_ipc_server()?;
         let niri_rx = self.start_niri_monitor();
+        let config_watch_rx = self.start_config_watcher();
 
         // Initial session and keyboard discovery
         info!("Refreshing user sessions...");
@@ -105,6 +109,7 @@ impl AsyncDaemon {
         let mut ipc_check = tokio::time::interval(Duration::from_millis(10));
         let mut session_check = tokio::time::interval(Duration::from_secs(5));
         let mut niri_check = tokio::time::interval(Duration::from_millis(50));
+        let mut config_check = tokio::time::interval(Duration::from_millis(100));
 
         loop {
             tokio::select! {
@@ -121,6 +126,9 @@ impl AsyncDaemon {
                 _ = niri_check.tick() => {
                     self.handle_niri_events(&niri_rx).await;
                 }
+                _ = config_check.tick() => {
+                    self.handle_config_changes(&config_watch_rx).await;
+                }
             }
         }
     }
@@ -132,7 +140,12 @@ impl AsyncDaemon {
         let keyboards = find_all_keyboards();
         info!("Found {} logical keyboard(s)", keyboards.len());
 
-        // Update keyboard metadata
+        // Mark all existing keyboards as disconnected first
+        for meta in self.all_keyboards.values_mut() {
+            meta.connected = false;
+        }
+
+        // Update keyboard metadata for connected keyboards
         for (kbd_id, logical_kbd) in keyboards {
             let kbd_name = logical_kbd.name.clone();
             let paths: Vec<PathBuf> = logical_kbd
@@ -141,8 +154,14 @@ impl AsyncDaemon {
                 .map(|(path, _)| path.clone())
                 .collect();
 
+            let was_known = self.all_keyboards.contains_key(&kbd_id);
             info!(
-                "Detected keyboard: {} ({}) with {} event file(s)",
+                "{} keyboard: {} ({}) with {} event file(s)",
+                if was_known {
+                    "Found existing"
+                } else {
+                    "Detected new"
+                },
                 kbd_name,
                 kbd_id,
                 paths.len()
@@ -156,6 +175,13 @@ impl AsyncDaemon {
                     connected: true,
                 },
             );
+        }
+
+        // Log disconnected keyboards
+        for (kbd_id, meta) in &self.all_keyboards {
+            if !meta.connected {
+                info!("Keyboard disconnected: {} ({})", meta.name, kbd_id);
+            }
         }
 
         Ok(())
@@ -172,10 +198,25 @@ impl AsyncDaemon {
         // Load configs for active users (if not already loaded)
         self.load_user_configs().await;
 
+        // First, stop processors for disconnected keyboards
+        let disconnected_keyboards: Vec<_> = self
+            .all_keyboards
+            .iter()
+            .filter(|(_, meta)| !meta.connected)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for kbd_id in disconnected_keyboards {
+            info!("Stopping processors for disconnected keyboard: {}", kbd_id);
+            let _ = self.stop_processors_for_keyboard(&kbd_id).await;
+            self.keyboard_owners.remove(&kbd_id);
+        }
+
         // Collect keyboard data first to avoid borrow checker issues
         let keyboards: Vec<_> = self
             .all_keyboards
             .iter()
+            .filter(|(_, meta)| meta.connected) // Only process connected keyboards
             .map(|(id, meta)| (id.clone(), meta.clone()))
             .collect();
 
@@ -620,17 +661,196 @@ impl AsyncDaemon {
         rx
     }
 
+    /// Start config file watcher for automatic reload
+    /// Returns: Receiver<()> that signals when any config changed
+    fn start_config_watcher(&self) -> mpsc::Receiver<()> {
+        use notify::{recommended_watcher, Event, EventKind, RecursiveMode, Watcher};
+
+        let (tx, rx) = mpsc::channel();
+
+        thread::spawn(move || {
+            let (watch_tx, watch_rx) = std::sync::mpsc::channel();
+
+            let mut watcher = match recommended_watcher(watch_tx) {
+                Ok(w) => w,
+                Err(e) => {
+                    error!("Failed to create config file watcher: {}", e);
+                    return;
+                }
+            };
+
+            // Build set of config paths by scanning /home
+            let mut watched_paths: HashSet<PathBuf> = HashSet::new();
+
+            // Scan for users with keyboard-middleware configs
+            if let Ok(entries) = std::fs::read_dir("/home") {
+                for entry in entries.flatten() {
+                    let home_dir = entry.path();
+                    let config_dir = home_dir.join(".config/keyboard-middleware");
+                    let config_path = config_dir.join("config.ron");
+
+                    if config_path.exists() {
+                        // Watch the config directory (not recursively)
+                        if let Err(e) = watcher.watch(&config_dir, RecursiveMode::NonRecursive) {
+                            warn!("Failed to watch {:?}: {}", config_dir, e);
+                        } else {
+                            info!("Watching config at {:?}", config_path);
+                            watched_paths.insert(config_path);
+                        }
+                    }
+                }
+            }
+
+            info!(
+                "Config file watcher started for {} config(s)",
+                watched_paths.len()
+            );
+
+            loop {
+                match watch_rx.recv() {
+                    Ok(Ok(Event {
+                        kind: EventKind::Modify(_) | EventKind::Create(_),
+                        paths,
+                        ..
+                    })) => {
+                        // Check if any modified file is a config.ron we're watching
+                        let mut detected_change = false;
+                        for path in paths {
+                            if watched_paths.contains(&path) {
+                                info!("Config file changed: {:?}", path);
+                                detected_change = true;
+                                break;
+                            }
+                        }
+
+                        if detected_change {
+                            // Debounce: drain all events for the next 300ms
+                            let debounce_start = std::time::Instant::now();
+                            while debounce_start.elapsed() < Duration::from_millis(300) {
+                                if watch_rx.recv_timeout(Duration::from_millis(50)).is_err() {
+                                    break;
+                                }
+                                // Drain event, continue debouncing
+                            }
+
+                            // Send single reload signal after debounce
+                            info!("Config changes settled, triggering reload");
+                            let _ = tx.send(());
+                        }
+                    }
+                    Ok(Ok(_)) => {} // Ignore other event types
+                    Ok(Err(e)) => error!("Config watch error: {}", e),
+                    Err(e) => {
+                        error!("Config watch channel error: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        rx
+    }
+
     /// Handle hotplug events
     #[allow(clippy::future_not_send)]
     async fn handle_hotplug_events(&mut self, rx: &mpsc::Receiver<String>) {
         while let Ok(event) = rx.try_recv() {
             debug!("Hotplug event: {}", event);
 
-            // Rediscover keyboards
+            // Reload config before handling the hotplug event
+            info!("Reloading configs before processing hotplug event...");
+            self.load_user_configs().await;
+
+            // Rediscover keyboards (updates all_keyboards metadata)
             if let Err(e) = self.discover_keyboards().await {
                 error!("Failed to rediscover keyboards: {}", e);
+                continue;
+            }
+
+            // Sync keyboards to users (start/stop threads based on what changed)
+            self.sync_keyboards_to_users().await;
+        }
+    }
+
+    /// Handle config file changes - triggers full reload (same as IPC)
+    #[allow(clippy::future_not_send)]
+    async fn handle_config_changes(&mut self, rx: &mpsc::Receiver<()>) {
+        while rx.try_recv().is_ok() {
+            // Additional debouncing: ignore if we reloaded very recently
+            if let Some(last_reload) = self.last_config_reload {
+                if last_reload.elapsed() < Duration::from_millis(500) {
+                    debug!("Ignoring config change (too soon after last reload)");
+                    continue;
+                }
+            }
+
+            info!("Config file changed, triggering full reload...");
+            self.last_config_reload = Some(std::time::Instant::now());
+            if let Err(e) = self.reload_all_configs().await {
+                error!("Auto-reload failed: {}", e);
             }
         }
+    }
+
+    /// Reload all user configs and restart processors
+    async fn reload_all_configs(&mut self) -> Result<()> {
+        info!("Reloading all user configs...");
+
+        // Send notification to user
+        let _ = std::process::Command::new("runuser")
+            .args([
+                "-u",
+                "fib",
+                "--",
+                "/usr/bin/notify-send",
+                "reloading middleware",
+            ])
+            .spawn();
+
+        // Step 1: Validate all configs before stopping anything
+        info!("Validating configs...");
+        let active_uids = self.get_active_user_uids().await;
+        for &uid in &active_uids {
+            let home_dir = match self.get_user_home_dir(uid) {
+                Ok(dir) => dir,
+                Err(_) => continue,
+            };
+
+            let config_path = home_dir.join(".config/keyboard-middleware/config.ron");
+            if config_path.exists() {
+                // Try to load and validate
+                let new_config = match crate::config::Config::load(&config_path) {
+                    Ok(cfg) => cfg,
+                    Err(e) => {
+                        error!("Config load failed for user {}: {}", uid, e);
+                        return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
+                    }
+                };
+                if let Err(e) = new_config.validate_silent() {
+                    error!("Config validation failed for user {}: {}", uid, e);
+                    return Err(anyhow::anyhow!("Invalid config for user {}: {}", uid, e));
+                }
+            }
+        }
+
+        // Step 2: Stop all processors
+        info!("Stopping all processors...");
+        let all_kbd_ids: Vec<_> = self.keyboard_owners.keys().cloned().collect();
+        for kbd_id in all_kbd_ids {
+            let _ = self.stop_processors_for_keyboard(&kbd_id).await;
+        }
+
+        // Step 3: Clear and reload configs
+        info!("Reloading configs from disk...");
+        self.user_configs.clear();
+        self.load_user_configs().await;
+
+        // Step 4: Restart all processors with new configs
+        info!("Restarting processors with new configs...");
+        self.sync_keyboards_to_users().await;
+
+        info!("Config reload complete!");
+        Ok(())
     }
 
     /// Handle IPC commands
@@ -678,11 +898,14 @@ impl AsyncDaemon {
                     IpcResponse::KeyboardList(keyboards)
                 }
                 IpcRequest::ToggleKeyboards => {
-                    info!("Hot-reload requested via IPC");
-                    // Reload all user configs and resync keyboards
-                    self.load_user_configs().await;
-                    self.sync_keyboards_to_users().await;
-                    IpcResponse::Ok
+                    info!("Toggle keyboards requested via IPC");
+                    match self.reload_all_configs().await {
+                        Ok(()) => IpcResponse::Ok,
+                        Err(e) => {
+                            error!("Toggle reload failed: {}", e);
+                            IpcResponse::Error(format!("Toggle failed: {}", e))
+                        }
+                    }
                 }
                 IpcRequest::EnableKeyboard(hardware_id) => {
                     info!("Enable keyboard requested via IPC: {}", hardware_id);
@@ -711,6 +934,16 @@ impl AsyncDaemon {
                     } else {
                         self.keyboard_owners.remove(&kbd_id);
                         IpcResponse::Ok
+                    }
+                }
+                IpcRequest::Reload => {
+                    info!("Config reload requested via IPC");
+                    match self.reload_all_configs().await {
+                        Ok(()) => IpcResponse::Ok,
+                        Err(e) => {
+                            error!("Config reload failed: {}", e);
+                            IpcResponse::Error(format!("Reload failed: {}", e))
+                        }
                     }
                 }
                 IpcRequest::Shutdown => {
