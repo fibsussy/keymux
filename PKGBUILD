@@ -1,7 +1,7 @@
 # Maintainer: fibsussy <noahlykins@gmail.com>
 # Local build - builds from current directory without network requests
 pkgname=keyboard-middleware
-pkgver=0.3.3
+pkgver=0.3.4
 pkgrel=1
 pkgdesc="QMK-inspired keyboard middleware with home row mods, layers, SOCD, and game mode"
 arch=('x86_64' 'aarch64')
