@@ -407,13 +407,16 @@ impl AsyncDaemon {
         event_paths: &[PathBuf],
         uid: u32,
     ) -> Result<()> {
-        // Get user's config
-        let config = self
+        // Get user's config and apply per-keyboard overrides
+        let base_config = self
             .user_configs
             .get(&uid)
             .context("User config not loaded")?
             .get_config()
             .await;
+
+        // Apply per-keyboard config overrides
+        let config = base_config.for_keyboard(&kbd_id.to_string());
 
         info!(
             "Starting {} event processor thread(s) for: {} (user: {})",
@@ -781,6 +784,21 @@ impl AsyncDaemon {
     #[allow(clippy::future_not_send)]
     async fn handle_config_changes(&mut self, rx: &mpsc::Receiver<()>) {
         while rx.try_recv().is_ok() {
+            // Check if hot config reload is enabled for ANY user
+            let mut hot_reload_enabled = false;
+            for mgr in self.user_configs.values() {
+                let config = mgr.get_config().await;
+                if config.hot_config_reload {
+                    hot_reload_enabled = true;
+                    break;
+                }
+            }
+
+            if !hot_reload_enabled {
+                debug!("Config file changed, but hot_config_reload is disabled - ignoring");
+                continue;
+            }
+
             // Additional debouncing: ignore if we reloaded very recently
             if let Some(last_reload) = self.last_config_reload {
                 if last_reload.elapsed() < Duration::from_millis(500) {
@@ -789,7 +807,7 @@ impl AsyncDaemon {
                 }
             }
 
-            info!("Config file changed, triggering full reload...");
+            info!("Config file changed, triggering hot reload...");
             self.last_config_reload = Some(std::time::Instant::now());
             if let Err(e) = self.reload_all_configs().await {
                 error!("Auto-reload failed: {}", e);

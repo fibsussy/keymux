@@ -242,8 +242,9 @@ pub struct LayerConfig {
 }
 
 /// Game mode configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GameMode {
+    #[serde(default)]
     pub remaps: HashMap<KeyCode, Action>,
 }
 
@@ -270,28 +271,19 @@ impl GameMode {
 }
 
 /// Per-keyboard override configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyboardOverride {
-    pub keymap: Option<KeymapOverride>,
-    pub settings: Option<SettingsOverride>,
-}
-
-/// Keymap override - specify which layers/remaps to override
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeymapOverride {
-    pub base_remaps: Option<HashMap<KeyCode, Action>>,
-    pub layers: Option<HashMap<Layer, LayerConfig>>,
-    pub game_mode_remaps: Option<HashMap<KeyCode, Action>>,
-}
-
-/// Settings override
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SettingsOverride {
+/// This has the EXACT same structure as the main Config, but all fields are optional
+/// This allows you to copy the global config and paste it here - it will just override the specified fields
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct PerKeyboardConfig {
     pub tapping_term_ms: Option<u32>,
+    pub mt_config: Option<MtConfig>,
+    pub remaps: Option<HashMap<KeyCode, Action>>,
+    pub layers: Option<HashMap<Layer, LayerConfig>>,
+    pub game_mode: Option<GameMode>,
 }
 
 /// MT (Mod-Tap) configuration
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MtConfig {
     /// Enable permissive hold - if another key is pressed while MT is pending,
     /// immediately resolve to hold (default: true)
@@ -299,16 +291,16 @@ pub struct MtConfig {
     pub permissive_hold: bool,
 
     /// Enable same-hand roll detection - rolls on same hand favor tap (default: true)
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "enable_roll_detection")]
     pub same_hand_roll_detection: bool,
 
     /// Enable opposite-hand chord detection - chords on opposite hands favor hold (default: true)
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "enable_chord_detection")]
     pub opposite_hand_chord_detection: bool,
 
     /// Enable multi-mod detection - multiple modifiers held simultaneously
     /// on same hand all promote to hold (default: true)
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "enable_multi_mod_detection")]
     pub multi_mod_detection: bool,
 
     /// Minimum number of MT keys held to trigger multi-mod (default: 2)
@@ -316,23 +308,23 @@ pub struct MtConfig {
     pub multi_mod_threshold: usize,
 
     /// Enable adaptive timing - adjust thresholds based on user behavior (default: false)
-    #[serde(default)]
+    #[serde(default, alias = "enable_adaptive_timing")]
     pub adaptive_timing: bool,
 
     /// Enable predictive intent scoring (default: false)
-    #[serde(default)]
+    #[serde(default, alias = "enable_predictive_scoring")]
     pub predictive_scoring: bool,
 
     /// Roll detection window in ms (default: 150)
-    #[serde(default = "default_roll_window")]
+    #[serde(default = "default_roll_window", alias = "roll_threshold_ms")]
     pub roll_detection_window_ms: u32,
 
     /// Chord detection window in ms (default: 50)
-    #[serde(default = "default_chord_window")]
+    #[serde(default = "default_chord_window", alias = "chord_threshold_ms")]
     pub chord_detection_window_ms: u32,
 
     /// Enable double-tap-then-hold - double tap to hold the tap key until released (default: false)
-    #[serde(default)]
+    #[serde(default, alias = "enable_double_tap_hold")]
     pub double_tap_then_hold: bool,
 
     /// Window (ms) for detecting double-taps (default: 300)
@@ -342,13 +334,33 @@ pub struct MtConfig {
     /// Enable cross-hand unwrap - when holding a modifier on one hand,
     /// MT keys on the opposite hand will unwrap to their tap key (default: true)
     /// Example: Hold ; (right hand, becomes Win), press f (left hand MT) → types 'f' not Shift
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", alias = "enable_cross_hand_unwrap")]
     pub cross_hand_unwrap: bool,
 
     /// Target margin (ms) to keep adaptive threshold above average tap duration (default: 30)
     /// Example: If your average tap is 45ms, threshold becomes 45 + 30 = 75ms
-    #[serde(default = "default_adaptive_margin")]
+    #[serde(default = "default_adaptive_margin", alias = "target_margin_ms")]
     pub adaptive_target_margin_ms: u32,
+
+    /// Pause adaptive learning in game mode (default: true)
+    #[serde(default = "default_true")]
+    pub pause_learning_in_game_mode: bool,
+
+    /// Exponential moving average alpha for adaptive learning (default: 0.02)
+    #[serde(default = "default_ema_alpha")]
+    pub ema_alpha: f32,
+
+    /// Auto-save adaptive stats interval in seconds (default: 30)
+    #[serde(default = "default_auto_save_interval")]
+    pub auto_save_interval_secs: u32,
+}
+
+fn default_ema_alpha() -> f32 {
+    0.02
+}
+
+fn default_auto_save_interval() -> u32 {
+    30
 }
 
 fn default_true() -> bool {
@@ -386,21 +398,49 @@ impl Default for MtConfig {
             double_tap_window_ms: 300,
             cross_hand_unwrap: true,
             adaptive_target_margin_ms: 30,
+            pause_learning_in_game_mode: true,
+            ema_alpha: 0.02,
+            auto_save_interval_secs: 30,
         }
     }
 }
 
 /// Main configuration structure
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_tapping_term")]
     pub tapping_term_ms: u32,
     #[serde(default)]
     pub mt_config: MtConfig,
+    #[serde(default)]
     pub enabled_keyboards: Option<Vec<String>>,
+    #[serde(default)]
     pub remaps: HashMap<KeyCode, Action>,
+    #[serde(default)]
     pub layers: HashMap<Layer, LayerConfig>,
+    #[serde(default)]
     pub game_mode: GameMode,
-    pub keyboard_overrides: HashMap<String, KeyboardOverride>,
+    #[serde(default)]
+    pub per_keyboard_overrides: HashMap<String, PerKeyboardConfig>,
+
+    /// Enable hot config reload - automatically reload config when file changes (default: false)
+    /// When enabled, changes to config.ron are immediately applied without restarting daemon
+    #[serde(default)]
+    pub hot_config_reload: bool,
+
+    /// Per-keyboard configs inherit global layout by default (default: true)
+    /// - true: per_keyboard_overrides merge with global config (override specific fields)
+    /// - false: per_keyboard_overrides replace global config (build from scratch)
+    #[serde(default = "default_true_bool")]
+    pub per_keyboard_inherits_global_layout: bool,
+}
+
+fn default_tapping_term() -> u32 {
+    130
+}
+
+fn default_true_bool() -> bool {
+    true
 }
 
 impl Config {
@@ -430,33 +470,61 @@ impl Config {
     }
 
     /// Get effective config for a specific keyboard
+    /// Applies per-keyboard overrides on top of the global config (or replaces it)
     #[must_use]
     pub fn for_keyboard(&self, keyboard_id: &str) -> Self {
-        let mut config = self.clone();
+        if let Some(override_cfg) = self.per_keyboard_overrides.get(keyboard_id) {
+            if self.per_keyboard_inherits_global_layout {
+                // INHERITING MODE: Start with global config, merge/override with per-keyboard settings
+                let mut config = self.clone();
 
-        if let Some(override_cfg) = self.keyboard_overrides.get(keyboard_id) {
-            // Apply settings overrides
-            if let Some(settings) = &override_cfg.settings {
-                if let Some(term) = settings.tapping_term_ms {
+                // Apply all overrides - each field is optional and only overrides if Some
+                if let Some(term) = override_cfg.tapping_term_ms {
                     config.tapping_term_ms = term;
                 }
-            }
+                if let Some(mt) = &override_cfg.mt_config {
+                    config.mt_config = mt.clone();
+                }
 
-            // Apply keymap overrides
-            if let Some(keymap) = &override_cfg.keymap {
-                if let Some(base) = &keymap.base_remaps {
-                    config.remaps.clone_from(base);
+                // MERGE remaps: extend global remaps with per-keyboard remaps
+                // Per-keyboard remaps override global ones for the same keys
+                if let Some(remaps) = &override_cfg.remaps {
+                    config.remaps.extend(remaps.clone());
                 }
-                if let Some(layers) = &keymap.layers {
-                    config.layers.clone_from(layers);
+
+                // MERGE layers: extend global layers with per-keyboard layers
+                // Per-keyboard layers override global ones for the same layer names
+                if let Some(layers) = &override_cfg.layers {
+                    config.layers.extend(layers.clone());
                 }
-                if let Some(game) = &keymap.game_mode_remaps {
-                    config.game_mode.remaps.clone_from(game);
+
+                // MERGE game_mode: extend global game_mode remaps with per-keyboard game_mode remaps
+                if let Some(game_mode) = &override_cfg.game_mode {
+                    config.game_mode.remaps.extend(game_mode.remaps.clone());
+                }
+
+                config
+            } else {
+                // NON-INHERITING MODE: Build from scratch with per-keyboard config only
+                // Use defaults for any fields not specified in per-keyboard config
+                Config {
+                    tapping_term_ms: override_cfg
+                        .tapping_term_ms
+                        .unwrap_or_else(default_tapping_term),
+                    mt_config: override_cfg.mt_config.clone().unwrap_or_default(),
+                    enabled_keyboards: self.enabled_keyboards.clone(), // Keep global enabled_keyboards
+                    remaps: override_cfg.remaps.clone().unwrap_or_default(),
+                    layers: override_cfg.layers.clone().unwrap_or_default(),
+                    game_mode: override_cfg.game_mode.clone().unwrap_or_default(),
+                    per_keyboard_overrides: HashMap::new(), // Don't nest overrides
+                    hot_config_reload: self.hot_config_reload, // Keep global hot reload setting
+                    per_keyboard_inherits_global_layout: self.per_keyboard_inherits_global_layout, // Keep global setting
                 }
             }
+        } else {
+            // No per-keyboard override found, return global config as-is
+            self.clone()
         }
-
-        config
     }
 
     /// Save only `enabled_keyboards` field, preserving rest of file

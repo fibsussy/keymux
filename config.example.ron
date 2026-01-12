@@ -365,39 +365,212 @@
     ),
 
     // ============================================================================
+    // GLOBAL DAEMON SETTINGS
+    // ============================================================================
+    
+    // Hot config reload: automatically reload config when file changes (default: false)
+    // When enabled, changes to config.ron are immediately applied without restarting daemon
+    // Useful for: Testing configs, live tuning, rapid iteration
+    // WARNING: May cause brief input hiccups during reload
+    hot_config_reload: false,
+    
+    // Per-keyboard configs inherit global layout (default: true)
+    // This controls how per_keyboard_overrides behave:
+    //
+    // true (INHERITING MODE - recommended for most users):
+    //   - Start with your global config
+    //   - MERGE per-keyboard overrides with global config
+    //   - remaps: global remaps + per-keyboard remaps (per-keyboard wins on conflicts)
+    //   - layers: global layers + per-keyboard layers (per-keyboard wins on conflicts)
+    //   - game_mode: global game_mode remaps + per-keyboard game_mode remaps
+    //   - Example: Keep all your home row mods, just add one extra remap for this keyboard
+    //
+    // false (FROM-SCRATCH MODE - for completely different layouts):
+    //   - Start with empty/default config
+    //   - Only use what you specify in per_keyboard_overrides
+    //   - Build a completely independent layout for that keyboard
+    //   - Example: Global has home row mods, per-keyboard has traditional layout
+    //
+    per_keyboard_inherits_global_layout: true,
+
+    // ============================================================================
     // PER-KEYBOARD OVERRIDES
     // ============================================================================
     //
     // Override settings for specific keyboards
     // Useful when you have multiple keyboards with different preferences
     // Find keyboard IDs with: keyboard-middleware list
+    //
+    // IMPORTANT: The structure is IDENTICAL to the global config!
+    // You can copy ANY section from above and paste it here.
+    // Only the fields you specify will be overridden for that keyboard.
+    //
+    // Behavior depends on per_keyboard_inherits_global_layout:
+    //   - true: Merges with global config (override specific fields)
+    //   - false: Replaces global config (build from scratch)
     // ============================================================================
 
-    keyboard_overrides: {
-        // Example: Override timing for a specific keyboard
-        // "1234:5678:0100:0003:usb-0000:00:00.0-1/input0": (
-        //     settings: (
-        //         // Longer timing for laptop keyboard
-        //         tapping_term_ms: 150,
-        //         // Enable double-tap for this keyboard
-        //         double_tap_window_ms: Some(300),
-        //     ),
-        //     // Override keymap for this keyboard
-        //     keymap: (
-        //         base_remaps: {
-        //             KC_CAPS: Key(KC_LCTL),  // Different caps behavior
+    per_keyboard_overrides: {
+        // ========================================================================
+        // INHERITING MODE EXAMPLES (per_keyboard_inherits_global_layout: true)
+        // ========================================================================
+        // These examples show how to override SPECIFIC fields while keeping
+        // everything else from the global config.
+        
+        // Example 1: Override just timing for a laptop keyboard
+        // "2e3c:c365:0110:0003": (
+        //     tapping_term_ms: Some(150),  // Slower timing for laptop keyboard
+        // ),
+        
+        // Example 2: Add/override specific remaps for a specific keyboard
+        // (MERGES with global remaps - keeps all global remaps, adds these)
+        // "1234:5678:0100:0003": (
+        //     remaps: Some({
+        //         KC_CAPS: Key(KC_LCTL),  // Override global caps behavior
+        //         KC_BSPC: CMD("/usr/bin/my-script.sh"),  // Add new remap
+        //         // All other global remaps (home row mods, etc.) are preserved!
+        //     }),
+        // ),
+        
+        // Example 2b: Override a layer while keeping others
+        // "1234:5678:0100:0003": (
+        //     layers: Some({
+        //         "nav": (
+        //             remaps: {
+        //                 // This REPLACES the "nav" layer definition
+        //                 // But keeps all other global layers ("num", "sym", etc.)
+        //                 KC_H: Key(KC_LEFT),
+        //                 KC_J: Key(KC_DOWN),
+        //             },
+        //         ),
+        //     }),
+        // ),
+        
+        // Example 3: Complete override - different layout for different keyboard!
+        // "362d:0210:0111:0003": (
+        //     // Different timing
+        //     tapping_term_ms: Some(150),
+        //     
+        //     // Different MT config
+        //     mt_config: Some((
+        //         permissive_hold: false,  // More conservative on this keyboard
+        //         enable_roll_detection: true,
+        //         enable_chord_detection: true,
+        //         enable_multi_mod_detection: true,
+        //         enable_cross_hand_unwrap: true,
+        //         enable_double_tap_hold: true,
+        //         enable_adaptive_timing: false,
+        //         pause_learning_in_game_mode: true,
+        //         roll_threshold_ms: 100,
+        //         chord_threshold_ms: 100,
+        //         target_margin_ms: 30,
+        //         ema_alpha: 0.02,
+        //         auto_save_interval_secs: 30,
+        //     )),
+        //     
+        //     // Different remaps
+        //     remaps: Some({
+        //         KC_CAPS: Key(KC_LCTL),
+        //         KC_A: Key(KC_A),  // No home row mods on this keyboard
+        //         KC_S: Key(KC_S),
+        //         KC_D: Key(KC_D),
+        //         KC_F: Key(KC_F),
+        //     }),
+        //     
+        //     // Different layers
+        //     layers: Some({
+        //         "nav": (
+        //             remaps: {
+        //                 KC_H: Key(KC_LEFT),
+        //                 KC_J: Key(KC_DOWN),
+        //                 KC_K: Key(KC_UP),
+        //                 KC_L: Key(KC_RGHT),
+        //             },
+        //         ),
+        //     }),
+        //     
+        //     // Different game mode
+        //     game_mode: Some((
+        //         remaps: {
+        //             KC_W: Key(KC_UP),  // Different game controls
         //         },
-        //         layers: {
-        //             "nav": (
-        //                 remaps: {
-        //                     KC_H: Key(KC_LEFT),
-        //                 },
-        //             ),
+        //     )),
+        // ),
+        
+        // Example 4: Just override one layer for a specific keyboard
+        // (keeps global remaps, other layers, game_mode, mt_config, etc.)
+        // "2e3c:c365:0110:0003": (
+        //     layers: Some({
+        //         "nav": (
+        //             remaps: {
+        //                 // Use arrow keys instead of HJKL for this keyboard
+        //                 KC_UP: Key(KC_UP),
+        //                 KC_DOWN: Key(KC_DOWN),
+        //                 KC_LEFT: Key(KC_LEFT),
+        //                 KC_RGHT: Key(KC_RGHT),
+        //             },
+        //         ),
+        //     }),
+        // ),
+        
+        // ========================================================================
+        // FROM-SCRATCH MODE EXAMPLES (per_keyboard_inherits_global_layout: false)
+        // ========================================================================
+        // When per_keyboard_inherits_global_layout is false, you can build
+        // completely independent layouts for different keyboards!
+        //
+        // Use case: Your global config has home row mods, but you want a
+        // traditional layout (no mods) on your laptop keyboard.
+        
+        // Example 5: Traditional layout for laptop (no home row mods)
+        // Set per_keyboard_inherits_global_layout: false at the top, then:
+        // "2e3c:c365:0110:0003": (
+        //     tapping_term_ms: Some(150),
+        //     
+        //     // No MT keys - just simple remaps
+        //     remaps: Some({
+        //         KC_CAPS: Key(KC_ESC),  // Only remap caps
+        //     }),
+        //     
+        //     // Simple layers if needed
+        //     layers: Some({
+        //         "nav": (
+        //             remaps: {
+        //                 KC_H: Key(KC_LEFT),
+        //                 KC_J: Key(KC_DOWN),
+        //                 KC_K: Key(KC_UP),
+        //                 KC_L: Key(KC_RGHT),
+        //             },
+        //         ),
+        //     }),
+        //     
+        //     // Simple game mode
+        //     game_mode: Some((
+        //         remaps: {
+        //             KC_CAPS: Key(KC_ESC),
         //         },
-        //         game_mode_remaps: {
-        //             KC_W: Key(KC_UP),  // Different game mode setup
+        //     )),
+        // ),
+        
+        // Example 6: Gaming keyboard with specialized layout
+        // "1234:5678:0100:0003": (
+        //     // Fast timing for gaming
+        //     tapping_term_ms: Some(50),
+        //     
+        //     // Minimal remaps - keep most keys default
+        //     remaps: Some({
+        //         KC_CAPS: Key(KC_LCTL),  // Gaming-friendly caps = ctrl
+        //     }),
+        //     
+        //     // Gaming-focused game mode with extensive SOCD
+        //     game_mode: Some((
+        //         remaps: {
+        //             KC_W: SOCD(KC_W, [KC_S]),
+        //             KC_S: SOCD(KC_S, [KC_W]),
+        //             KC_A: SOCD(KC_A, [KC_D]),
+        //             KC_D: SOCD(KC_D, [KC_A]),
         //         },
-        //     ),
+        //     )),
         // ),
     },
 )
