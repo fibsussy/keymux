@@ -277,9 +277,9 @@ fn run_event_processor(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                // No events available - yield to OS scheduler but don't sleep
-                // This prevents CPU spinning while maintaining instant response
-                std::thread::yield_now();
+                // No events available - sleep briefly to avoid CPU spinning
+                // 1ms sleep provides excellent responsiveness while preventing busy-wait
+                std::thread::sleep(std::time::Duration::from_millis(1));
             }
             Err(e) => return Err(e.into()),
         }
