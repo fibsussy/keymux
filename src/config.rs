@@ -478,11 +478,29 @@ fn default_true_bool() -> bool {
 }
 
 impl Config {
+    /// Preprocess config text to allow bare KeyCode syntax
+    /// Transforms `KC_*` → `Key(KC_*)` when it appears as a HashMap value
+    fn preprocess_config(content: &str) -> String {
+        use regex::Regex;
+
+        // Pattern: Match colon, optional whitespace, KC_SOMETHING, then comma or closing brace
+        // Captures: colon + whitespace, the keycode, and the trailing delimiter
+        // We need to preserve the trailing delimiter in the replacement
+        let re = Regex::new(r"(:\s*)(KC_[A-Z0-9_]+)(\s*[,\}])").unwrap();
+
+        // Replace with: original prefix, Key(keycode), original suffix
+        re.replace_all(content, "${1}Key($2)${3}").to_string()
+    }
+
     /// Load config from RON file
     #[allow(clippy::missing_errors_doc)]
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config = ron::from_str(&content).map_err(|e| {
+
+        // Preprocess to support bare KeyCode syntax
+        let preprocessed = Self::preprocess_config(&content);
+
+        let config = ron::from_str(&preprocessed).map_err(|e| {
             let error_msg = e.to_string();
 
             // Provide helpful hints for common errors
@@ -813,5 +831,62 @@ impl Config {
         } else {
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preprocess_bare_keycode() {
+        // Test bare KC_* after colon
+        let input = "KC_CAPS: KC_ESC,";
+        let expected = "KC_CAPS: Key(KC_ESC),";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        // Test already wrapped - should not double-wrap
+        let input = "KC_CAPS: Key(KC_ESC),";
+        let expected = "KC_CAPS: Key(KC_ESC),";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        // Test KC_* inside function calls - should not wrap
+        let input = "KC_A: MT(KC_A, KC_LCTL),";
+        let expected = "KC_A: MT(KC_A, KC_LCTL),";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        // Test multiple bare keycodes
+        let input = "KC_CAPS: KC_ESC,\nKC_ESC: KC_GRV,";
+        let expected = "KC_CAPS: Key(KC_ESC),\nKC_ESC: Key(KC_GRV),";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        // Test with closing brace
+        let input = "KC_CAPS: KC_ESC}";
+        let expected = "KC_CAPS: Key(KC_ESC)}";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        // Test with whitespace variations
+        let input = "KC_CAPS:KC_ESC,";
+        let expected = "KC_CAPS:Key(KC_ESC),";
+        assert_eq!(Config::preprocess_config(input), expected);
+
+        let input = "KC_CAPS:  KC_ESC,";
+        let expected = "KC_CAPS:  Key(KC_ESC),";
+        assert_eq!(Config::preprocess_config(input), expected);
+    }
+
+    #[test]
+    fn test_preprocess_preserves_other_actions() {
+        // TO action
+        let input = r#"KC_LALT: TO("nav"),"#;
+        assert_eq!(Config::preprocess_config(input), input);
+
+        // SOCD action
+        let input = "KC_W: SOCD(KC_W, [KC_S]),";
+        assert_eq!(Config::preprocess_config(input), input);
+
+        // CMD action
+        let input = r#"KC_F1: CMD("/usr/bin/test"),"#;
+        assert_eq!(Config::preprocess_config(input), input);
     }
 }

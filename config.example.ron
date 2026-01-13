@@ -143,10 +143,13 @@
         // === SIMPLE KEY REMAPS ===
         
         // Caps Lock -> Escape (very useful!)
-        KC_CAPS: Key(KC_ESC),
+        // You can use either bare KeyCode syntax: KC_CAPS: KC_ESC
+        // Or explicit Action syntax: KC_CAPS: Key(KC_ESC)
+        // Both work the same way!
+        KC_CAPS: KC_ESC,
         
         // Escape -> Backtick (for programmers using Vim/terminal)
-        KC_ESC: Key(KC_GRV),
+        KC_ESC: KC_GRV,
 
         // === LAYER SWITCHING ===
         //
@@ -227,23 +230,24 @@
             remaps: {
                 // Keep modifiers accessible on nav layer
                 // (so you can Ctrl+arrow keys)
-                KC_A: Key(KC_LGUI),
-                KC_S: Key(KC_LALT),
-                KC_D: Key(KC_LCTL),
-                KC_F: Key(KC_LSFT),
+                KC_A: KC_LGUI,
+                KC_S: KC_LALT,
+                KC_D: KC_LCTL,
+                KC_F: KC_LSFT,
                 
                 // Vim-style navigation
                 // (IJKL becomes arrow keys)
-                KC_H: Key(KC_LEFT),
-                KC_J: Key(KC_DOWN),
-                KC_K: Key(KC_UP),
-                KC_L: Key(KC_RGHT),
+                // Using bare KeyCode syntax for cleaner configs!
+                KC_H: KC_LEFT,
+                KC_J: KC_DOWN,
+                KC_K: KC_UP,
+                KC_L: KC_RGHT,
                 
                 // Add navigation helpers
-                KC_U: Key(KC_HOME),    // U = Home
-                KC_I: Key(KC_PGUP),    // I = Page Up
-                KC_N: Key(KC_PGDN),    // N = Page Down
-                KC_M: Key(KC_END),     // M = End
+                KC_U: KC_HOME,    // U = Home
+                KC_I: KC_PGUP,    // I = Page Up
+                KC_N: KC_PGDN,    // N = Page Down
+                KC_M: KC_END,     // M = End
                 
                 // Example: Run custom command on nav layer
                 // KC_BSPC: CMD("/usr/bin/notify-send 'Nav layer active!'"),
@@ -272,32 +276,15 @@
             },
         ),
         
-        "sym": (
-            remaps: {
-                // Common symbols
-                KC_Q: Key(KC_EXCLAIM),   // !
-                KC_W: Key(KC_AT),         // @
-                KC_E: Key(KC_HASH),       // #
-                KC_R: Key(KC_DOLLAR),    // $
-                KC_T: Key(KC_PERCENT),    // %
-                KC_Y: Key(KC_CARET),     // ^
-                KC_U: Key(KC_AMPERSAND),  // &
-                KC_I: Key(KC_ASTERISK),   // *
-                KC_O: Key(KC_LPRN),      // (
-                KC_P: Key(KC_RPRN),      // )
-                
-                // More symbols
-                KC_A: Key(KC_LCBR),     // {
-                KC_S: Key(KC_RCBR),     // }
-                KC_D: Key(KC_LBRC),     // [
-                KC_F: Key(KC_RBRC),     // ]
-                KC_G: Key(KC_PIPE),      // |
-                KC_H: Key(KC_BSLS),     // \
-                KC_J: Key(KC_COLN),      // :
-                KC_K: Key(KC_QUOT),      // '
-                KC_L: Key(KC_DQUO),      // "
-            },
-        ),
+        // "sym": (
+        //     remaps: {
+        //         // Common symbols - Note: These specific KeyCodes don't exist yet
+        //         // This is just an example of what a symbol layer could look like
+        //         // In practice, you'd need to map to existing keys and use shifted versions
+        //         KC_Q: Key(KC_1),      // Example: remap Q to 1
+        //         KC_W: Key(KC_2),      // Example: remap W to 2
+        //     },
+        // ),
         
         "media": (
             remaps: {
@@ -332,9 +319,9 @@
 
     game_mode: (
         remaps: {
-            // Keep essential remaps
-            KC_CAPS: Key(KC_ESC),
-            KC_ESC: Key(KC_GRV),
+            // Keep essential remaps (using bare KeyCode syntax)
+            KC_CAPS: KC_ESC,
+            KC_ESC: KC_GRV,
 
             // === SOCD CLEANER FOR GAMING ===
             //
