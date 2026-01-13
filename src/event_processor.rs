@@ -76,6 +76,11 @@ fn run_event_processor(
     let mut virtual_device = create_virtual_device(device, keyboard_name)?;
     info!("Created virtual device for: {}", keyboard_name);
 
+    // SAFETY: Release all keys immediately on startup to prevent stuck keys
+    // This fixes the hotplug bug where keys remain held after reconnection
+    release_all_keys_on_startup(&mut virtual_device);
+    info!("Released all keys on startup for safety: {}", keyboard_name);
+
     // Create keymap processor (QMK-inspired)
     let mut keymap = KeymapProcessor::new(config);
 
@@ -289,6 +294,84 @@ fn create_virtual_device(physical_device: &Device, keyboard_name: &str) -> Resul
         .build()?;
 
     Ok(virtual_device)
+}
+
+/// Release all keys on startup (before keymap exists) to fix hotplug stuck keys
+fn release_all_keys_on_startup(virtual_device: &mut VirtualDevice) {
+    use evdev::InputEvent;
+
+    // Release all modifiers (most critical for stuck keys)
+    let modifiers = [
+        Key::KEY_LEFTCTRL,
+        Key::KEY_RIGHTCTRL,
+        Key::KEY_LEFTSHIFT,
+        Key::KEY_RIGHTSHIFT,
+        Key::KEY_LEFTALT,
+        Key::KEY_RIGHTALT,
+        Key::KEY_LEFTMETA,
+        Key::KEY_RIGHTMETA,
+    ];
+
+    for key in &modifiers {
+        let event = InputEvent::new_now(EventType::KEY, key.code(), 0);
+        let _ = virtual_device.emit(&[event]);
+    }
+
+    // Release all letter keys (common for WASD/typing)
+    let letters = [
+        Key::KEY_A,
+        Key::KEY_B,
+        Key::KEY_C,
+        Key::KEY_D,
+        Key::KEY_E,
+        Key::KEY_F,
+        Key::KEY_G,
+        Key::KEY_H,
+        Key::KEY_I,
+        Key::KEY_J,
+        Key::KEY_K,
+        Key::KEY_L,
+        Key::KEY_M,
+        Key::KEY_N,
+        Key::KEY_O,
+        Key::KEY_P,
+        Key::KEY_Q,
+        Key::KEY_R,
+        Key::KEY_S,
+        Key::KEY_T,
+        Key::KEY_U,
+        Key::KEY_V,
+        Key::KEY_W,
+        Key::KEY_X,
+        Key::KEY_Y,
+        Key::KEY_Z,
+    ];
+
+    for key in &letters {
+        let event = InputEvent::new_now(EventType::KEY, key.code(), 0);
+        let _ = virtual_device.emit(&[event]);
+    }
+
+    // Release common navigation/control keys
+    let nav_keys = [
+        Key::KEY_UP,
+        Key::KEY_DOWN,
+        Key::KEY_LEFT,
+        Key::KEY_RIGHT,
+        Key::KEY_SPACE,
+        Key::KEY_ENTER,
+        Key::KEY_TAB,
+        Key::KEY_ESC,
+    ];
+
+    for key in &nav_keys {
+        let event = InputEvent::new_now(EventType::KEY, key.code(), 0);
+        let _ = virtual_device.emit(&[event]);
+    }
+
+    // Send final SYN_REPORT
+    let syn_event = InputEvent::new_now(EventType::SYNCHRONIZATION, SYN_CODE, SYN_REPORT);
+    let _ = virtual_device.emit(&[syn_event]);
 }
 
 /// Release all potentially held keys before shutdown
