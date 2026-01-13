@@ -4,6 +4,45 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 use config::Layer;
+use std::path::PathBuf;
+
+/// Get the actual user UID, respecting SUDO context
+/// Returns (uid, is_sudo) where is_sudo indicates if running under sudo
+pub fn get_actual_user_uid() -> (u32, bool) {
+    // Check if running under sudo
+    if let Ok(sudo_uid) = std::env::var("SUDO_UID") {
+        if let Ok(uid) = sudo_uid.parse::<u32>() {
+            return (uid, true);
+        }
+    }
+
+    // Fall back to current effective UID
+    (unsafe { libc::getuid() }, false)
+}
+
+/// Get user's home directory from UID using getent
+/// Works even when running as root/sudo
+pub fn get_user_home_dir(uid: u32) -> anyhow::Result<PathBuf> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("getent passwd {} | cut -d: -f6", uid))
+        .output()?;
+
+    if !output.status.success() {
+        return Err(anyhow::anyhow!(
+            "Failed to get home directory for UID {}",
+            uid
+        ));
+    }
+
+    let home = String::from_utf8(output.stdout)?.trim().to_string();
+
+    if home.is_empty() {
+        return Err(anyhow::anyhow!("Empty home directory for UID {}", uid));
+    }
+
+    Ok(PathBuf::from(home))
+}
 
 pub mod config;
 mod config_manager;
@@ -253,8 +292,10 @@ fn clear_adaptive_stats() -> Result<()> {
         return Ok(());
     }
 
-    let home = std::env::var("HOME").expect("HOME not set");
-    let config_dir = std::path::PathBuf::from(format!("{}/.config/keyboard-middleware", home));
+    let (uid, _) = keyboard_middleware::get_actual_user_uid();
+    let home =
+        keyboard_middleware::get_user_home_dir(uid).expect("Failed to get user home directory");
+    let config_dir = home.join(".config").join("keyboard-middleware");
 
     let mt_stats = config_dir.join("adaptive_stats.json");
     let all_stats = config_dir.join("all_key_stats.json");
@@ -303,8 +344,12 @@ fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
 
     // Load config
     let config_path = config_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        let home = std::env::var("HOME").expect("HOME not set");
-        std::path::PathBuf::from(format!("{}/.config/keyboard-middleware/config.ron", home))
+        let (uid, _) = keyboard_middleware::get_actual_user_uid();
+        let home =
+            keyboard_middleware::get_user_home_dir(uid).expect("Failed to get user home directory");
+        home.join(".config")
+            .join("keyboard-middleware")
+            .join("config.ron")
     });
 
     print!("  → Loading config... ");

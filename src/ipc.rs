@@ -64,8 +64,9 @@ pub fn get_root_socket_path() -> PathBuf {
 
 /// Get the IPC socket path for user daemon (legacy, for compatibility)
 pub fn get_user_socket_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .unwrap_or_else(|_| format!("/run/user/{}", unsafe { libc::getuid() }));
+    let (uid, _) = crate::get_actual_user_uid();
+    let runtime_dir =
+        std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| format!("/run/user/{}", uid));
     Path::new(&runtime_dir).join("keyboard-middleware.sock")
 }
 

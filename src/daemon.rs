@@ -932,16 +932,20 @@ impl AsyncDaemon {
     async fn reload_all_configs(&mut self) -> Result<()> {
         info!("Reloading all user configs...");
 
-        // Send notification to user
-        let _ = std::process::Command::new("runuser")
-            .args([
-                "-u",
-                "fib",
-                "--",
-                "/usr/bin/notify-send",
-                "reloading middleware",
-            ])
-            .spawn();
+        // Send notification to all users who own keyboards
+        let owner_uids: HashSet<u32> = self.keyboard_owners.values().copied().collect();
+        for uid in owner_uids {
+            let _ = std::process::Command::new("runuser")
+                .args([
+                    "-u",
+                    &uid.to_string(),
+                    "--",
+                    "/usr/bin/notify-send",
+                    "Keyboard Middleware",
+                    "Reloading configuration...",
+                ])
+                .spawn();
+        }
 
         // Step 1: Validate all configs before stopping anything
         info!("Validating configs...");

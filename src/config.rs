@@ -185,7 +185,7 @@ pub enum KeyCode {
 
 /// Layer identifier - fully generic string-based layers
 /// "base" and "game_mode" are reserved layer names
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct Layer(pub String);
 
 impl Layer {
@@ -202,6 +202,40 @@ impl Layer {
     /// Create a new layer from string
     pub fn new(name: impl Into<String>) -> Self {
         Layer(name.into())
+    }
+}
+
+// Custom deserializer to allow both TO("nav") and TO(Layer("nav"))
+impl<'de> serde::Deserialize<'de> for Layer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct LayerVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for LayerVisitor {
+            type Value = Layer;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a layer name string or Layer struct")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Layer, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Layer(value.to_string()))
+            }
+
+            fn visit_newtype_struct<D>(self, deserializer: D) -> Result<Layer, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                String::deserialize(deserializer).map(Layer)
+            }
+        }
+
+        deserializer.deserialize_any(LayerVisitor)
     }
 }
 
@@ -448,7 +482,28 @@ impl Config {
     #[allow(clippy::missing_errors_doc)]
     pub fn load(path: &std::path::Path) -> anyhow::Result<Self> {
         let content = std::fs::read_to_string(path)?;
-        let config = ron::from_str(&content)?;
+        let config = ron::from_str(&content).map_err(|e| {
+            let error_msg = e.to_string();
+
+            // Provide helpful hints for common errors
+            if error_msg.contains("TO") || error_msg.contains("Layer") {
+                anyhow::anyhow!(
+                    "Config parsing error: {}\n\n\
+                    HINT: Layer switching syntax is: TO(\"layer_name\")\n\
+                    Example: KC_LALT: TO(\"nav\")",
+                    e
+                )
+            } else if error_msg.contains("MT") {
+                anyhow::anyhow!(
+                    "Config parsing error: {}\n\n\
+                    HINT: Mod-Tap syntax is: MT(tap_key, hold_key)\n\
+                    Example: KC_A: MT(KC_A, KC_LALT)",
+                    e
+                )
+            } else {
+                anyhow::anyhow!("Config parsing error: {}", e)
+            }
+        })?;
         Ok(config)
     }
 
@@ -464,9 +519,21 @@ impl Config {
     /// Get default config path
     #[allow(clippy::missing_errors_doc)]
     pub fn default_path() -> anyhow::Result<std::path::PathBuf> {
-        let config_dir =
-            dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
-        Ok(config_dir.join("keyboard-middleware").join("config.ron"))
+        let (uid, is_sudo) = crate::get_actual_user_uid();
+
+        if is_sudo {
+            // When run with sudo, use actual user's home directory
+            let home_dir = crate::get_user_home_dir(uid)?;
+            Ok(home_dir
+                .join(".config")
+                .join("keyboard-middleware")
+                .join("config.ron"))
+        } else {
+            // Normal case: use dirs crate
+            let config_dir =
+                dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
+            Ok(config_dir.join("keyboard-middleware").join("config.ron"))
+        }
     }
 
     /// Get effective config for a specific keyboard

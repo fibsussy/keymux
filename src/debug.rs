@@ -24,16 +24,30 @@ pub fn run_debug() -> Result<()> {
     println!("{}", "🧵 Process Info:".bright_yellow().bold());
     println!("  PID: {}", std::process::id().to_string().bright_white());
     println!("  Thread ID: {:?}", std::thread::current().id());
-    println!(
-        "  User: {}",
-        std::env::var("USER")
-            .unwrap_or_else(|_| "unknown".to_string())
-            .bright_white()
-    );
-    println!(
-        "  UID: {}",
-        unsafe { libc::getuid() }.to_string().bright_white()
-    );
+
+    let (actual_uid, is_sudo) = keyboard_middleware::get_actual_user_uid();
+
+    if is_sudo {
+        println!(
+            "  User: {} {}",
+            std::env::var("SUDO_USER")
+                .unwrap_or_else(|_| "unknown".to_string())
+                .bright_white(),
+            format!("(UID: {})", actual_uid).dimmed()
+        );
+        println!("  Running with: {}", "sudo".bright_yellow());
+    } else {
+        println!(
+            "  User: {}",
+            std::env::var("USER")
+                .unwrap_or_else(|_| "unknown".to_string())
+                .bright_white()
+        );
+        println!(
+            "  UID: {}",
+            unsafe { libc::getuid() }.to_string().bright_white()
+        );
+    }
     println!();
 
     // Config info
