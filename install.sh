@@ -97,8 +97,3 @@ echo ""
 echo "  Niri watcher (optional, for auto game mode):"
 echo "    systemctl --user enable --now keyboard-middleware-niri.service"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-sudo systemctl enable keyboard-middleware.service
-sudo systemctl restart keyboard-middleware.service
-systemctl --user enable keyboard-middleware-niri.service
-systemctl --user restart keyboard-middleware-niri.service
