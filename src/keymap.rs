@@ -77,8 +77,19 @@ impl KeymapProcessor {
         let extract_socd = |remaps: &HashMap<KeyCode, ConfigAction>,
                             defs: &mut HashMap<KeyCode, Vec<KeyCode>>| {
             for (_keycode, action) in remaps {
-                if let ConfigAction::SOCD(this_key, opposing_keys) = action {
-                    defs.insert(*this_key, opposing_keys.clone());
+                if let ConfigAction::SOCD(this_action, opposing_actions) = action {
+                    // Extract KeyCode from Action (only support Key actions for now)
+                    if let ConfigAction::Key(this_key) = this_action.as_ref() {
+                        let mut opposing_keys = Vec::new();
+                        for opp_action in opposing_actions {
+                            if let ConfigAction::Key(opp_key) = opp_action.as_ref() {
+                                opposing_keys.push(*opp_key);
+                            }
+                        }
+                        if !opposing_keys.is_empty() {
+                            defs.insert(*this_key, opposing_keys);
+                        }
+                    }
                 }
             }
         };
@@ -351,11 +362,16 @@ impl KeymapProcessor {
                 self.held_keys.insert(keycode, actions);
                 ProcessResult::None
             }
-            Some(ConfigAction::SOCD(this_key, _opposing_keys)) => {
-                // SOCD handling
-                actions.push(KeyAction::SocdManaged);
-                self.held_keys.insert(keycode, actions);
-                self.apply_socd_to_key_press(this_key)
+            Some(ConfigAction::SOCD(this_action, _opposing_actions)) => {
+                // SOCD handling - extract KeyCode from Action
+                if let ConfigAction::Key(this_key) = this_action.as_ref() {
+                    actions.push(KeyAction::SocdManaged);
+                    self.held_keys.insert(keycode, actions);
+                    self.apply_socd_to_key_press(*this_key)
+                } else {
+                    warn!("SOCD with non-Key actions not yet supported");
+                    ProcessResult::None
+                }
             }
             Some(ConfigAction::CMD(command)) => {
                 // Run arbitrary command

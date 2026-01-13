@@ -526,16 +526,21 @@ fn validate_config(config_path: Option<&std::path::Path>) -> Result<()> {
     let mut extract_socd = |remaps: &HashMap<KeyCode, Action>| {
         let mut pairs = Vec::new();
         for (key, action) in remaps {
-            if let Action::SOCD(this_key, opposing_keys) = action {
-                if key != this_key {
-                    errors.push(format!(
-                        "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
-                        key, this_key
-                    ));
-                }
-                // Store each opposing key as a pair for symmetry check
-                for opposing_key in opposing_keys {
-                    pairs.push((*this_key, *opposing_key));
+            if let Action::SOCD(this_action, opposing_actions) = action {
+                // Extract KeyCode from Action (only validate Key actions)
+                if let Action::Key(this_key) = this_action.as_ref() {
+                    if key != this_key {
+                        warnings.push(format!(
+                            "⚠️  SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
+                            key, this_key
+                        ));
+                    }
+                    // Store each opposing key as a pair for symmetry check
+                    for opposing_action in opposing_actions {
+                        if let Action::Key(opposing_key) = opposing_action.as_ref() {
+                            pairs.push((*this_key, *opposing_key));
+                        }
+                    }
                 }
             }
         }

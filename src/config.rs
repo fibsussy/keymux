@@ -254,9 +254,9 @@ pub enum Action {
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
     /// When this key is pressed, unpress all opposing keys
-    /// Format: SOCD(this_key, [opposing_keys...])
-    /// Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
-    SOCD(KeyCode, Vec<KeyCode>),
+    /// Format: SOCD(this_action, [opposing_actions...])
+    /// Example: SOCD(Key(KC_W), [Key(KC_S)]) or with the preprocessor: SOCD(KC_W, [KC_S])
+    SOCD(Box<Action>, Vec<Box<Action>>),
     /// OneShot Modifier - tap once, modifier stays active for next keypress only
     /// Perfect for typing capital letters without holding shift
     /// Format: OSM(modifier_action)
@@ -744,15 +744,20 @@ impl Config {
         let mut extract_socd = |remaps: &HashMap<KeyCode, Action>| {
             let mut pairs = Vec::new();
             for (key, action) in remaps {
-                if let Action::SOCD(this_key, opposing_keys) = action {
-                    if key != this_key {
-                        errors.push(format!(
-                            "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
-                            key, this_key
-                        ));
-                    }
-                    for opposing_key in opposing_keys {
-                        pairs.push((*this_key, *opposing_key));
+                if let Action::SOCD(this_action, opposing_actions) = action {
+                    // Extract KeyCode from Action (only validate Key actions)
+                    if let Action::Key(this_key) = this_action.as_ref() {
+                        if key != this_key {
+                            errors.push(format!(
+                                "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
+                                key, this_key
+                            ));
+                        }
+                        for opposing_action in opposing_actions {
+                            if let Action::Key(opposing_key) = opposing_action.as_ref() {
+                                pairs.push((*this_key, *opposing_key));
+                            }
+                        }
                     }
                 }
             }
