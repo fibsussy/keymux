@@ -5,6 +5,7 @@ use tracing::warn;
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
 use crate::doubletap::{DtConfig, DtProcessor, DtResolution};
 use crate::modtap::{MtAction, MtConfig as ModtapConfig, MtProcessor, MtResolution, RollingStats};
+use crate::oneshot::{OsmConfig, OsmProcessor, OsmResolution};
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
@@ -21,6 +22,8 @@ enum KeyAction {
     SocdManaged,
     /// DT key managed by DT processor
     DtManaged,
+    /// OSM key managed by OSM processor
+    OsmManaged,
 }
 
 /// SOCD group configuration
@@ -44,6 +47,9 @@ pub struct KeymapProcessor {
 
     /// DT (Double-Tap) processor
     dt_processor: DtProcessor,
+
+    /// OSM (OneShot Modifier) processor
+    osm_processor: OsmProcessor,
 
     /// Current active layer
     current_layer: Layer,
@@ -149,10 +155,17 @@ impl KeymapProcessor {
             double_tap_window_ms: config.double_tap_window_ms.unwrap_or(250),
         };
 
+        // Build OSM processor config
+        let osm_config = OsmConfig {
+            oneshot_timeout_ms: config.oneshot_timeout_ms.unwrap_or(5000),
+            tapping_term_ms: config.tapping_term_ms,
+        };
+
         Self {
             held_keys: HashMap::new(),
             mt_processor: MtProcessor::new(mt_config),
             dt_processor: DtProcessor::new(dt_config),
+            osm_processor: OsmProcessor::new(osm_config),
             current_layer: Layer::base(),
             base_remaps: config.remaps.clone(),
             layers,
@@ -398,10 +411,29 @@ impl KeymapProcessor {
                 // Run arbitrary command
                 ProcessResult::RunCommand(command.clone())
             }
-            Some(ConfigAction::OSM(_modifier_action)) => {
-                // TODO: OneShot Modifier - to be implemented next
-                warn!("OSM action not yet implemented");
-                ProcessResult::None
+            Some(ConfigAction::OSM(modifier_action)) => {
+                // OSM (OneShot Modifier) - extract KeyCode for simple cases
+                if let Some(modifier_key) = Self::extract_keycode(modifier_action.as_ref()) {
+                    // Check OSM timeouts first
+                    let timeouts = self.osm_processor.check_timeouts();
+                    // Process timeouts if any (emit release events)
+                    if !timeouts.is_empty() {
+                        // These will be handled in the event loop
+                    }
+
+                    // Register this OSM key
+                    let _resolution = self.osm_processor.on_press(keycode, modifier_key);
+
+                    actions.push(KeyAction::OsmManaged);
+                    self.held_keys.insert(keycode, actions);
+
+                    // OSM doesn't emit on press, waits for release to determine tap/hold
+                    ProcessResult::None
+                } else {
+                    // OSM with complex actions not yet supported
+                    warn!("OSM with non-Key actions not yet supported");
+                    ProcessResult::None
+                }
             }
             Some(ConfigAction::DT(tap_action, double_tap_action)) => {
                 // DT (Double-Tap) - extract KeyCodes for simple cases
@@ -515,6 +547,23 @@ impl KeymapProcessor {
                             }
                             DtResolution::Undecided => {
                                 // Still waiting
+                                return ProcessResult::None;
+                            }
+                        }
+                    }
+                    KeyAction::OsmManaged => {
+                        // Let OSM processor handle the release
+                        let resolution = self.osm_processor.on_release(keycode);
+                        match resolution {
+                            OsmResolution::ActivateModifier(mod_key) => {
+                                // Tapped - activate one-shot
+                                return ProcessResult::EmitKey(mod_key, true);
+                            }
+                            OsmResolution::ReleaseModifier(mod_key) => {
+                                // Held - release normal modifier
+                                return ProcessResult::EmitKey(mod_key, false);
+                            }
+                            OsmResolution::None => {
                                 return ProcessResult::None;
                             }
                         }

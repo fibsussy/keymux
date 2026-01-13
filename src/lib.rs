@@ -7,6 +7,7 @@ pub mod keyboard_id;
 pub mod keymap;
 pub mod modtap;
 pub mod niri;
+pub mod oneshot;
 
 use std::path::PathBuf;
 

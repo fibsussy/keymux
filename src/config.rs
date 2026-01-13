@@ -324,6 +324,7 @@ pub struct PerKeyboardConfig {
     pub tapping_term_ms: Option<u32>,
     pub mt_config: Option<MtConfig>,
     pub double_tap_window_ms: Option<u64>,
+    pub oneshot_timeout_ms: Option<u64>,
     pub remaps: Option<HashMap<KeyCode, Action>>,
     pub layers: Option<HashMap<Layer, LayerConfig>>,
     pub game_mode: Option<GameMode>,
@@ -473,6 +474,10 @@ pub struct Config {
     /// Double-tap window (milliseconds) - QMK tap dance inspired
     /// Default: 250ms (configurable, sensible default)
     pub double_tap_window_ms: Option<u64>,
+
+    /// OneShot timeout (milliseconds) - QMK one-shot keys inspired
+    /// Default: 5000ms (5 seconds, like QMK)
+    pub oneshot_timeout_ms: Option<u64>,
 
     /// Enable hot config reload - automatically reload config when file changes (default: false)
     /// When enabled, changes to config.ron are immediately applied without restarting daemon
@@ -645,6 +650,7 @@ impl Config {
                     double_tap_window_ms: override_cfg
                         .double_tap_window_ms
                         .or(self.double_tap_window_ms),
+                    oneshot_timeout_ms: override_cfg.oneshot_timeout_ms.or(self.oneshot_timeout_ms),
                     hot_config_reload: self.hot_config_reload, // Keep global hot reload setting
                     per_keyboard_inherits_global_layout: self.per_keyboard_inherits_global_layout, // Keep global setting
                 }

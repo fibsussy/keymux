@@ -56,6 +56,7 @@ mod keymap;
 mod list;
 mod modtap;
 mod niri;
+mod oneshot;
 mod session_manager;
 mod toggle;
 
