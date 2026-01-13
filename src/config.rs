@@ -491,20 +491,60 @@ fn default_true_bool() -> bool {
 
 impl Config {
     /// Preprocess config text to allow bare KeyCode syntax everywhere
-    /// Transforms `KC_*` → `Key(KC_*)` making the Action enum fully recursive
+    /// Transforms `KC_*` → `Key(KC_*)` in all contexts except HashMap keys
+    ///
+    /// This heuristic allows cleaner config syntax:
+    /// - `KC_CAPS: KC_ESC,` → `KC_CAPS: Key(KC_ESC),`
+    /// - `MT(KC_A, KC_LGUI)` → `MT(Key(KC_A), Key(KC_LGUI))`
     fn preprocess_config(content: &str) -> String {
         use regex::Regex;
 
-        // Pattern 1: Match colon + KC_* as HashMap value: `KC_A: KC_B,`
-        let re1 = Regex::new(r"(:\s*)(KC_[A-Z0-9_]+)(\s*[,\}])").unwrap();
-        let step1 = re1.replace_all(content, "${1}Key($2)${3}").to_string();
+        // Pattern: Match bare KC_* that should be wrapped with Key()
+        let re = Regex::new(r"\b(KC_[A-Z0-9_]+)\b").unwrap();
 
-        // Pattern 2: Match KC_* inside function calls: `MT(KC_A, KC_B)`
-        // Match: opening paren/comma + optional whitespace + KC_* + optional whitespace + comma/closing paren
-        let re2 = Regex::new(r"([\(,]\s*)(KC_[A-Z0-9_]+)(\s*[\),])").unwrap();
-        let step2 = re2.replace_all(&step1, "${1}Key($2)${3}").to_string();
+        let mut result = String::with_capacity(content.len() * 2);
+        let mut last_end = 0;
 
-        step2
+        for cap in re.find_iter(content) {
+            let start = cap.start();
+            let end = cap.end();
+            let keycode = cap.as_str();
+
+            // Add everything before this match
+            result.push_str(&content[last_end..start]);
+
+            // Check what comes AFTER this KC_* to determine if it's a HashMap key
+            let suffix = &content[end..];
+            let next_char = suffix.trim_start().chars().next();
+
+            // Check what comes BEFORE to see if we should wrap
+            let prefix = &content[..start];
+            let prev_trimmed = prefix.trim_end();
+            let prev_char = prev_trimmed.chars().last();
+
+            // Don't wrap if:
+            // 1. It's followed by a colon (HashMap key): `KC_A:`
+            // 2. It's preceded by "Key(" (already wrapped)
+            let is_hashmap_key = next_char == Some(':');
+            let already_wrapped = prev_trimmed.ends_with("Key(");
+
+            // Wrap if it's after: colon, open paren, comma, or open bracket
+            let should_wrap = !is_hashmap_key
+                && !already_wrapped
+                && matches!(prev_char, Some(':') | Some('(') | Some(',') | Some('['));
+
+            if should_wrap {
+                result.push_str(&format!("Key({})", keycode));
+            } else {
+                result.push_str(keycode);
+            }
+
+            last_end = end;
+        }
+
+        // Add remaining content
+        result.push_str(&content[last_end..]);
+        result
     }
 
     /// Load config from RON file
@@ -515,28 +555,8 @@ impl Config {
         // Preprocess to support bare KeyCode syntax
         let preprocessed = Self::preprocess_config(&content);
 
-        let config = ron::from_str(&preprocessed).map_err(|e| {
-            let error_msg = e.to_string();
-
-            // Provide helpful hints for common errors
-            if error_msg.contains("TO") || error_msg.contains("Layer") {
-                anyhow::anyhow!(
-                    "Config parsing error: {}\n\n\
-                    HINT: Layer switching syntax is: TO(\"layer_name\")\n\
-                    Example: KC_LALT: TO(\"nav\")",
-                    e
-                )
-            } else if error_msg.contains("MT") {
-                anyhow::anyhow!(
-                    "Config parsing error: {}\n\n\
-                    HINT: Mod-Tap syntax is: MT(tap_key, hold_key)\n\
-                    Example: KC_A: MT(KC_A, KC_LALT)",
-                    e
-                )
-            } else {
-                anyhow::anyhow!("Config parsing error: {}", e)
-            }
-        })?;
+        let config = ron::from_str(&preprocessed)
+            .map_err(|e| anyhow::anyhow!("Config parsing error: {}", e))?;
         Ok(config)
     }
 
