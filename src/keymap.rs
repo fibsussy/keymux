@@ -1,5 +1,6 @@
 use evdev::Key;
 use std::collections::HashMap;
+use tracing::warn;
 
 use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
 use crate::modtap::{MtAction, MtConfig as ModtapConfig, MtProcessor, MtResolution, RollingStats};
@@ -297,33 +298,50 @@ impl KeymapProcessor {
                     ProcessResult::EmitKey(output_key, true)
                 }
             }
-            Some(ConfigAction::MT(tap_key, hold_key)) => {
-                // MT key - first check if other MT keys need to be resolved
-                let mt_resolutions = self.mt_processor.on_other_key_press(tap_key);
+            Some(ConfigAction::MT(tap_action, hold_action)) => {
+                // MT now uses Box<Action> - extract KeyCode if it's a simple Key action
+                let tap_key_opt = match tap_action.as_ref() {
+                    ConfigAction::Key(kc) => Some(*kc),
+                    _ => None,
+                };
+                let hold_key_opt = match hold_action.as_ref() {
+                    ConfigAction::Key(kc) => Some(*kc),
+                    _ => None,
+                };
 
-                // Then register this MT key
-                if let Some(resolution) = self.mt_processor.on_press(keycode, tap_key, hold_key) {
-                    // Double-tap detected, emit the hold immediately
-                    actions.push(KeyAction::MtManaged);
-                    self.held_keys.insert(keycode, actions);
+                if let (Some(tap_key), Some(hold_key)) = (tap_key_opt, hold_key_opt) {
+                    // MT key - first check if other MT keys need to be resolved
+                    let mt_resolutions = self.mt_processor.on_other_key_press(tap_key);
 
-                    if !mt_resolutions.is_empty() {
-                        let mut events = self.apply_mt_resolutions(mt_resolutions);
-                        events.extend(self.mt_resolution_to_events(&resolution));
-                        ProcessResult::MultipleEvents(events)
+                    // Then register this MT key
+                    if let Some(resolution) = self.mt_processor.on_press(keycode, tap_key, hold_key)
+                    {
+                        // Double-tap detected, emit the hold immediately
+                        actions.push(KeyAction::MtManaged);
+                        self.held_keys.insert(keycode, actions);
+
+                        if !mt_resolutions.is_empty() {
+                            let mut events = self.apply_mt_resolutions(mt_resolutions);
+                            events.extend(self.mt_resolution_to_events(&resolution));
+                            ProcessResult::MultipleEvents(events)
+                        } else {
+                            self.apply_mt_resolution_single(resolution)
+                        }
                     } else {
-                        self.apply_mt_resolution_single(resolution)
+                        // Normal MT processing
+                        actions.push(KeyAction::MtManaged);
+                        self.held_keys.insert(keycode, actions);
+
+                        if !mt_resolutions.is_empty() {
+                            ProcessResult::MultipleEvents(self.apply_mt_resolutions(mt_resolutions))
+                        } else {
+                            ProcessResult::None
+                        }
                     }
                 } else {
-                    // Normal MT processing
-                    actions.push(KeyAction::MtManaged);
-                    self.held_keys.insert(keycode, actions);
-
-                    if !mt_resolutions.is_empty() {
-                        ProcessResult::MultipleEvents(self.apply_mt_resolutions(mt_resolutions))
-                    } else {
-                        ProcessResult::None
-                    }
+                    // MT with complex nested actions not yet supported
+                    warn!("MT with non-Key actions not yet supported (e.g., MT(TO(...), ...))");
+                    ProcessResult::None
                 }
             }
             Some(ConfigAction::TO(layer)) => {
@@ -342,6 +360,16 @@ impl KeymapProcessor {
             Some(ConfigAction::CMD(command)) => {
                 // Run arbitrary command
                 ProcessResult::RunCommand(command.clone())
+            }
+            Some(ConfigAction::OSM(_modifier_action)) => {
+                // TODO: OneShot Modifier - to be implemented next
+                warn!("OSM action not yet implemented");
+                ProcessResult::None
+            }
+            Some(ConfigAction::DT(_tap_action, _double_tap_action)) => {
+                // TODO: Double-Tap - to be implemented next
+                warn!("DT action not yet implemented");
+                ProcessResult::None
             }
             None => {
                 // No remap - check if MT keys are pending (permissive hold)

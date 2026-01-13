@@ -245,9 +245,11 @@ pub enum Action {
     /// Direct key mapping
     Key(KeyCode),
     /// QMK-style Mod-Tap: advanced tap/hold with configurable behavior
-    /// MT(tap_key, hold_key) - Tap for tap_key, hold for hold_key
+    /// MT(tap_action, hold_action) - Tap for tap_action, hold for hold_action
     /// Supports: permissive hold, roll detection, chord detection, adaptive timing
-    MT(KeyCode, KeyCode),
+    /// Now fully recursive - can nest any actions!
+    /// Example: MT(Key(KC_TAB), TO("nav")) - tap for Tab, hold for nav layer
+    MT(Box<Action>, Box<Action>),
     /// Switch to layer
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
@@ -255,6 +257,16 @@ pub enum Action {
     /// Format: SOCD(this_key, [opposing_keys...])
     /// Example: SOCD(KC_W, [KC_S]) or SOCD(KC_W, [KC_S, KC_DOWN])
     SOCD(KeyCode, Vec<KeyCode>),
+    /// OneShot Modifier - tap once, modifier stays active for next keypress only
+    /// Perfect for typing capital letters without holding shift
+    /// Format: OSM(modifier_action)
+    /// Example: OSM(Key(KC_LSFT)) - tap for one-shot shift
+    OSM(Box<Action>),
+    /// Double-Tap action (QMK-style tap dance)
+    /// Single tap: performs first action, Double tap: performs second action
+    /// Format: DT(single_tap_action, double_tap_action)
+    /// Example: DT(Key(KC_LALT), TO("nav")) - single tap for alt, double tap for nav layer
+    DT(Box<Action>, Box<Action>),
     /// Run arbitrary shell command
     /// Example: CMD("/usr/bin/notify-send 'Hello'")
     CMD(String),
@@ -478,18 +490,21 @@ fn default_true_bool() -> bool {
 }
 
 impl Config {
-    /// Preprocess config text to allow bare KeyCode syntax
-    /// Transforms `KC_*` → `Key(KC_*)` when it appears as a HashMap value
+    /// Preprocess config text to allow bare KeyCode syntax everywhere
+    /// Transforms `KC_*` → `Key(KC_*)` making the Action enum fully recursive
     fn preprocess_config(content: &str) -> String {
         use regex::Regex;
 
-        // Pattern: Match colon, optional whitespace, KC_SOMETHING, then comma or closing brace
-        // Captures: colon + whitespace, the keycode, and the trailing delimiter
-        // We need to preserve the trailing delimiter in the replacement
-        let re = Regex::new(r"(:\s*)(KC_[A-Z0-9_]+)(\s*[,\}])").unwrap();
+        // Pattern 1: Match colon + KC_* as HashMap value: `KC_A: KC_B,`
+        let re1 = Regex::new(r"(:\s*)(KC_[A-Z0-9_]+)(\s*[,\}])").unwrap();
+        let step1 = re1.replace_all(content, "${1}Key($2)${3}").to_string();
 
-        // Replace with: original prefix, Key(keycode), original suffix
-        re.replace_all(content, "${1}Key($2)${3}").to_string()
+        // Pattern 2: Match KC_* inside function calls: `MT(KC_A, KC_B)`
+        // Match: opening paren/comma + optional whitespace + KC_* + optional whitespace + comma/closing paren
+        let re2 = Regex::new(r"([\(,]\s*)(KC_[A-Z0-9_]+)(\s*[\),])").unwrap();
+        let step2 = re2.replace_all(&step1, "${1}Key($2)${3}").to_string();
+
+        step2
     }
 
     /// Load config from RON file
