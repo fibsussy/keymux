@@ -30,6 +30,7 @@ colored = "2.1"
 notify = "6.1"
 tokio = { version = "1.41", features = ["full"] }
 crossbeam-channel = "0.5"
+crossterm = "0.28"
 
 [profile.release]
 opt-level = 3

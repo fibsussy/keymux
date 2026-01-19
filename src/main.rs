@@ -55,6 +55,7 @@ mod list;
 mod niri;
 mod session_manager;
 mod toggle;
+mod window;
 
 use daemon::AsyncDaemon;
 
@@ -814,9 +815,16 @@ fn run_niri_daemon() -> Result<()> {
 
     loop {
         match niri_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(niri::NiriEvent::WindowFocusChanged(window_info)) => {
-                // Determine if game mode should be active
-                let should_enable = niri::should_enable_gamemode(&window_info);
+            Ok(niri::NiriEvent::WindowFocusChanged(_window_info)) => {
+                // Get all windows and check if any focused window should enable game mode
+                let should_enable = match window::get_all_windows() {
+                    Ok(windows) => windows
+                        .iter()
+                        .find(|w| w.is_focused)
+                        .map(|w| matches!(w.game_mode_state(), window::GameModeState::GameMode(_)))
+                        .unwrap_or(false),
+                    Err(_) => false,
+                };
 
                 // Only send IPC if state changed
                 if should_enable != current_game_mode {

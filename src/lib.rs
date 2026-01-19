@@ -5,6 +5,7 @@ pub mod event_processor;
 pub mod ipc;
 pub mod keyboard_id;
 pub mod niri;
+pub mod window;
 
 use std::path::PathBuf;
 
