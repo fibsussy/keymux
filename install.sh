@@ -80,9 +80,13 @@ build_and_install() {
         if [ -f "$START_DIR/PKGBUILD" ] && [ -f "$START_DIR/Cargo.toml" ] && [ -z "$VERSION" ]; then
             echo "Detected keymux repository..."
             
+            # Copy entire repository first for all local modes
+            cp -r "$START_DIR" ./
+            local repo_name=$(basename "$START_DIR")
+            
             # Auto-detect mode if not specified
             if [ -z "$MODE" ]; then
-                if ! git -C "$START_DIR" diff --quiet || ! git -C "$START_DIR" diff --cached --quiet 2>/dev/null; then
+                if ! git -C "$repo_name" diff --quiet || ! git -C "$repo_name" diff --cached --quiet 2>/dev/null; then
                     echo "Found uncommitted changes, using local WIP build"
                     MODE="local"
                 else
@@ -98,11 +102,159 @@ build_and_install() {
                 makepkg -si
             elif [ "$MODE" = "local" ]; then
                 echo "Building local WIP package..."
+                # Create a simple PKGBUILD for local build
+                cat > PKGBUILD << EOF
+# Maintainer: fibsussy <fibsussy@tuta.io>
+pkgname=keymux-local
+pkgver=1.0.0+local
+pkgrel=1
+pkgdesc="Keyboard middleware for gaming with low-level input interception (local WIP version)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/fibsussy/keymux"
+license=('MIT')
+depends=('systemd' 'udev')
+makedepends=('rust' 'cargo')
+optdepends=('niri: automatic game mode detection in Niri compositor')
+provides=('keymux')
+conflicts=('keymux' 'keymux-bin' 'keymux-git')
+options=('!debug')
+install=keymux.install
+source=("keymux.tar.gz")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$repo_name"
+    local version=\$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)
+    echo "\$version+wip"
+}
+
+prepare() {
+    cd "$repo_name"
+    cargo fetch --locked --target "\$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$repo_name"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release
+}
+
+package() {
+    cd "$repo_name"
+    local binary_name="keymux"
+    
+    install -Dm755 "target/release/\$binary_name" "\$pkgdir/usr/bin/\$binary_name"
+    install -Dm644 "\$binary_name.service" "\$pkgdir/usr/lib/systemd/system/\$binary_name.service"
+    install -Dm644 "\$binary_name-niri.service" "\$pkgdir/usr/lib/systemd/user/\$binary_name-niri.service"
+    install -Dm644 "config.example.ron" "\$pkgdir/usr/share/doc/\$binary_name/config.example.ron"
+    install -Dm644 README.md "\$pkgdir/usr/share/doc/\$binary_name/README.md"
+    
+    install -dm755 "\$pkgdir/usr/share/bash-completion/completions"
+    install -dm755 "\$pkgdir/usr/share/zsh/site-functions"
+    install -dm755 "\$pkgdir/usr/share/fish/vendor_completions.d"
+    
+    "target/release/\$binary_name" completion bash > "\$pkgdir/usr/share/bash-completion/completions/\$binary_name"
+    "target/release/\$binary_name" completion zsh > "\$pkgdir/usr/share/zsh/site-functions/_\$binary_name"
+    "target/release/\$binary_name" completion fish > "\$pkgdir/usr/share/fish/vendor_completions.d/\$binary_name.fish"
+    
+    install -dm755 "\$pkgdir/etc/skel/.config/\$binary_name"
+}
+EOF
+                # Create tarball of the source (excluding target directory and other build artifacts)
+                tar czf keymux.tar.gz --exclude="$repo_name/target" --exclude="$repo_name/*.tar.gz" --exclude="$repo_name/.PKGINFO" --exclude="$repo_name/pkg" -C . "$repo_name"
+                cp "$repo_name/keymux.install" ./
+                makepkg -si
             elif [ "$MODE" = "git" ]; then
                 echo "Building git package..."
-                cp "$START_DIR/PKGBUILD-git" ./PKGBUILD
-                cp "$START_DIR/keymux.install" ./
-                makepkg -si
+                echo "Creating tarball of source (excluding target directory and other build artifacts)..."
+                tar czf keymux.tar.gz --exclude="$repo_name/target" --exclude="$repo_name/*.tar.gz" --exclude="$repo_name/.PKGINFO" --exclude="$repo_name/pkg" -C . "$repo_name"
+                echo "Tarball created successfully"
+                
+                # Create a simple PKGBUILD that uses the tarball source
+                echo "Creating PKGBUILD..."
+                cat > PKGBUILD << EOF
+# Maintainer: fibsussy <fibsussy@tuta.io>
+pkgname=keymux-git
+pkgver=1.0.0+git
+pkgrel=1
+pkgdesc="Keyboard middleware for gaming with low-level input interception (git version)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/fibsussy/keymux"
+license=('MIT')
+depends=('systemd' 'udev')
+makedepends=('rust' 'cargo')
+optdepends=('niri: automatic game mode detection in Niri compositor')
+provides=('keymux')
+conflicts=('keymux' 'keymux-bin' 'keymux-local')
+options=('!debug')
+install=keymux.install
+source=("keymux.tar.gz")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$repo_name"
+    local version=\$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)
+    if [ -d .git ]; then
+        local commit=\$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        local date=\$(git log -1 --format=%cd --date=format:%Y%m%d 2>/dev/null || date +%Y%m%d)
+        
+        # Check if there are uncommitted changes
+        if ! git diff --quiet 2>/dev/null || ! git diff --cached --quiet 2>/dev/null; then
+            echo "\$version+r\$commit.\$date+wip"
+        else
+            echo "\$version+r\$commit.\$date"
+        fi
+    else
+        echo "\$version+local"
+    fi
+}
+
+prepare() {
+    cd "$repo_name"
+    cargo fetch --locked --target "\$CARCH-unknown-linux-gnu"
+}
+
+build() {
+    cd "$repo_name"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release
+}
+
+package() {
+    cd "$repo_name"
+    local binary_name="keymux"
+    
+    install -Dm755 "target/release/\$binary_name" "\$pkgdir/usr/bin/\$binary_name"
+    install -Dm644 "\$binary_name.service" "\$pkgdir/usr/lib/systemd/system/\$binary_name.service"
+    install -Dm644 "\$binary_name-niri.service" "\$pkgdir/usr/lib/systemd/user/\$binary_name-niri.service"
+    install -Dm644 "config.example.ron" "\$pkgdir/usr/share/doc/\$binary_name/config.example.ron"
+    install -Dm644 README.md "\$pkgdir/usr/share/doc/\$binary_name/README.md"
+    
+    install -dm755 "\$pkgdir/usr/share/bash-completion/completions"
+    install -dm755 "\$pkgdir/usr/share/zsh/site-functions"
+    install -dm755 "\$pkgdir/usr/share/fish/vendor_completions.d"
+    
+    "target/release/\$binary_name" completion bash > "\$pkgdir/usr/share/bash-completion/completions/\$binary_name"
+    "target/release/\$binary_name" completion zsh > "\$pkgdir/usr/share/zsh/site-functions/_\$binary_name"
+    "target/release/\$binary_name" completion fish > "\$pkgdir/usr/share/fish/vendor_completions.d/\$binary_name.fish"
+    
+    install -dm755 "\$pkgdir/etc/skel/.config/\$binary_name"
+}
+EOF
+                echo "PKGBUILD created successfully"
+                cp "$repo_name/keymux.install" ./
+                echo "keymux.install copied"
+                echo "Running makepkg to build and install package..."
+                if [ -t 0 ] && [ -t 1 ]; then
+                    makepkg -si
+                else
+                    echo "Not building interactively, creating package only..."
+                    makepkg -s
+                    echo "Package built. To install manually:"
+                    echo "  sudo pacman -U keymux-git-*.pkg.tar.zst"
+                fi
             fi
 
         else

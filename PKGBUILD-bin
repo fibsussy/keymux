@@ -8,19 +8,21 @@ url="https://github.com/fibsussy/keymux"
 license=('MIT')
 depends=('systemd' 'udev')
 optdepends=('niri: automatic game mode detection in Niri compositor')
+provides=('keymux')
+conflicts=('keymux' 'keymux-git' 'keymux-local')
 options=('!debug')
 install=keymux.install
 
-source_x86_64=("$url/releases/download/v$pkgver/keyboard-middleware-linux-x86_64.tar.gz")
-source_aarch64=("$url/releases/download/v$pkgver/keyboard-middleware-linux-aarch64.tar.gz")
-sha256sums_x86_64=('d577e4507c4b430fb43243631f10e0a172b55a0f959eba66aa70f48167d74948')
-sha256sums_aarch64=('50b4bbaa29d7106dc280f422672a9e7205d6ead3c28802a646d64cde0d149c0a')
+source_x86_64=("$url/releases/download/v${pkgver%+bin}/keymux-linux-x86_64.tar.gz")
+source_aarch64=("$url/releases/download/v${pkgver%+bin}/keymux-linux-aarch64.tar.gz")
+sha256sums_x86_64=('56764499515cb017e73ac6b7b60a1774d9c656c847ba1e56703931daff3ec737')
+sha256sums_aarch64=('3e14d23b99bc2af501fcc19dd3a8629e1da55427c827086f76e736ba4ad5d123')
 
 package() {
     cd "$srcdir"
     
     local binary_name="keymux"
-    local extracted_binary="keyboard-middleware"
+    local extracted_binary="keymux"
     
     install -Dm755 "$extracted_binary" "$pkgdir/usr/bin/$binary_name"
     
