@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-git
-pkgver=1.0.0+git
+pkgver=1.0.0
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (git version)"
 arch=('x86_64' 'aarch64')
@@ -13,7 +13,7 @@ provides=('keymux')
 conflicts=('keymux' 'keymux-bin' 'keymux-local')
 options=('!debug')
 install=keymux.install
-source=("git+file:///home/fib/Code/fibsussy/keymux")
+source=("git+https://github.com/fibsussy/keymux.git")
 sha256sums=('SKIP')
 
 pkgver() {
@@ -21,29 +21,24 @@ pkgver() {
     local version=$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)
     local commit=$(git rev-parse --short HEAD)
     local date=$(git log -1 --format=%cd --date=format:%Y%m%d)
-    
-    # Check if there are uncommitted changes
-    if ! git diff --quiet || ! git diff --cached --quiet; then
-        echo "$version+r$commit.$date+wip"
-    else
-        echo "$version+r$commit.$date"
-    fi
+    echo "$version+r$commit.$date"
 }
 
 prepare() {
-    cd keymux-git
-    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+    cd keymux
+    # For git version, we're always building from clean remote clone
+    # No need to check for uncommitted changes
 }
 
 build() {
-    cd keymux-git
+    cd keymux
     export RUSTUP_TOOLCHAIN=stable
     export CARGO_TARGET_DIR=target
     cargo build --release --frozen
 }
 
 package() {
-    cd keymux-git
+    cd keymux
     local binary_name="keymux"
     
     install -Dm755 "target/release/$binary_name" "$pkgdir/usr/bin/$binary_name"
