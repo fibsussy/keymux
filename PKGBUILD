@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux
-pkgver=1.0.0
+pkgver=1.0.0+()
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception"
 arch=('x86_64')
@@ -10,7 +10,7 @@ depends=('gcc-libs' 'systemd' 'evdev')
 makedepends=('cargo' 'git')
 options=('!lto')
 install='keymux.install'
-source=("git+https://github.com/fibsussy/keymux.git#tag=v$pkgver")
+source=("git+https://github.com/fibsussy/keymux.git#tag=v1.0.0
 sha256sums=('SKIP')
 
 prepare() {
