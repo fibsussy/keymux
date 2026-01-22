@@ -153,8 +153,9 @@ package() {
 EOF
     
     # Create tarball and install
+    tar czf ../keymux.tar.gz --exclude=PKGBUILD .
     cd ..
-    tar czf keymux.tar.gz --exclude=keymux.tar.gz keymux-src/
+    cp keymux-src/PKGBUILD .
     cp keymux-src/keymux.install . 2>/dev/null || echo "Warning: keymux.install not found"
     
     echo "Building and installing package..."
