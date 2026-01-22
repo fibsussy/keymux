@@ -1,0 +1,21 @@
+pkgbase = keymux-local
+	pkgdesc = Keyboard middleware for gaming with low-level input interception (local build)
+	pkgver = 1.0.0
+	pkgrel = 1
+	url = https://github.com/fibsussy/keymux
+	install = keymux.install
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = git
+	depends = gcc-libs
+	depends = systemd
+	depends = libevdev
+	provides = keymux
+	conflicts = keymux-bin
+	conflicts = keymux-git
+	options = !lto
+	source = git+https://github.com/fibsussy/keymux.git
+	sha256sums = SKIP
+
+pkgname = keymux-local
