@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-bin
-pkgver=1.0.3
+pkgver=1.0.4
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (binary release)"
 arch=('x86_64' 'aarch64')
