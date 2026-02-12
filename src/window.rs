@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::Command;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GameModeState {
     Normal,
     GameMode(String), // Contains reason
@@ -174,7 +174,7 @@ fn parse_niri_windows(text: &str) -> Result<Vec<Window>, String> {
         // Look for window header: "Window ID <id>: (focused)"
         if let Some(window_start) = line.strip_prefix("Window ID ") {
             let parts: Vec<&str> = window_start.split(':').collect();
-            if parts.len() >= 1 {
+            if !parts.is_empty() {
                 let id_part = parts[0].trim();
                 if let Ok(id) = id_part.parse::<u32>() {
                     let is_focused = line.contains("(focused)");
@@ -222,11 +222,10 @@ fn parse_niri_windows(text: &str) -> Result<Vec<Window>, String> {
 /// Get process command line for more specific detection
 fn get_process_cmdline(pid: u32) -> String {
     let cmdline_path = format!("/proc/{pid}/cmdline");
-    if let Ok(contents) = fs::read(&cmdline_path) {
-        String::from_utf8_lossy(&contents).replace('\0', " ")
-    } else {
-        String::new()
-    }
+    fs::read(&cmdline_path).map_or_else(
+        |_| String::new(),
+        |contents| String::from_utf8_lossy(&contents).replace('\0', " "),
+    )
 }
 
 /// Check if a process has `IS_GAME=1` in its environment

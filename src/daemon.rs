@@ -52,6 +52,7 @@ pub struct AsyncDaemon {
     /// Current game mode state (preserved across thread restarts)
     game_mode_active: bool,
     /// Last config reload time for debouncing
+    #[allow(dead_code)]
     last_config_reload: Option<std::time::Instant>,
 }
 
@@ -791,6 +792,7 @@ impl AsyncDaemon {
             let mut watched_dirs: HashSet<PathBuf> = HashSet::new();
 
             /// Resolve symlinks to get the final target path
+            #[allow(clippy::option_if_let_else)]
             fn resolve_symlink(path: &Path) -> Option<PathBuf> {
                 match std::fs::symlink_metadata(path) {
                     Ok(metadata) => {
@@ -805,7 +807,7 @@ impl AsyncDaemon {
                                             .unwrap_or_else(|| Path::new("."))
                                             .join(&link_target)
                                             .canonicalize()
-                                            .unwrap_or_else(|_| link_target)
+                                            .unwrap_or(link_target)
                                     };
                                     Some(resolved)
                                 }
@@ -869,18 +871,18 @@ impl AsyncDaemon {
                     }
                 }
 
-                let symlink_info = if let Ok(metadata) = std::fs::symlink_metadata(&config_path) {
-                    if metadata.file_type().is_symlink() {
-                        format!(
-                            " (symlink -> {:?})",
-                            resolve_symlink(&config_path).unwrap_or_default()
-                        )
-                    } else {
-                        String::new()
-                    }
-                } else {
-                    String::new()
-                };
+                let symlink_info = std::fs::symlink_metadata(&config_path)
+                    .map(|metadata| {
+                        if metadata.file_type().is_symlink() {
+                            format!(
+                                " (symlink -> {:?})",
+                                resolve_symlink(&config_path).unwrap_or_default()
+                            )
+                        } else {
+                            String::new()
+                        }
+                    })
+                    .unwrap_or_default();
 
                 info!("Watching config at {:?}{}", config_path, symlink_info);
             }
@@ -970,10 +972,9 @@ impl AsyncDaemon {
         rx
     }
 
-    /// Handle hotplug events
-    #[allow(clippy::future_not_send)]
     /// Handle config file changes - triggers full reload (same as IPC)
     #[allow(clippy::future_not_send)]
+    #[allow(dead_code)]
     async fn check_config_hot_reload(&mut self) {
         // Check if hot config reload is enabled for ANY user
         let mut hot_reload_enabled = false;
@@ -1241,7 +1242,7 @@ impl AsyncDaemon {
     }
 
     /// Trigger adaptive stats save for all active processors
-    async fn save_adaptive_stats_all(&mut self) {
+    async fn save_adaptive_stats_all(&self) {
         info!(
             "Triggering adaptive stats save for {} active threads",
             self.active_processors.len()

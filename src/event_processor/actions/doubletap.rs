@@ -23,7 +23,7 @@
 /// - Single-tap emits when double_tap_window expires (even if no other key pressed)
 /// - Hold activates at tapping_term (typically < double_tap_window)
 /// - Double-tap must complete within double_tap_window from first press
-use crate::config::KeyCode;
+use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -42,6 +42,7 @@ pub enum DtState {
 
 /// Double-tap key tracking
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DtKey {
     /// Physical keycode
     pub keycode: KeyCode,
@@ -78,6 +79,7 @@ impl DtKey {
     }
 
     /// Time since first release (if released)
+    #[allow(dead_code)]
     pub fn elapsed_since_release(&self) -> Option<u128> {
         self.first_release_at.map(|t| t.elapsed().as_millis())
     }
@@ -258,6 +260,7 @@ impl DtProcessor {
     }
 
     /// Get currently tracked keys (for debugging)
+    #[allow(dead_code)]
     pub fn tracked_count(&self) -> usize {
         self.tracked_keys.len()
     }

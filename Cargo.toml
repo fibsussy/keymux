@@ -3,6 +3,10 @@ name = "keymux"
 version = "1.0.2"
 edition = "2021"
 
+[lib]
+name = "keymux"
+path = "src/lib.rs"
+
 [[bin]]
 name = "keymux"
 path = "src/main.rs"

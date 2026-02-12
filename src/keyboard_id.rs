@@ -1,7 +1,17 @@
+use crate::keycode::KeyCode;
 use evdev::Device;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Check if a device is a keyboard by verifying it has letter keys
+pub fn is_keyboard_device(device: &Device) -> bool {
+    device.supported_keys().is_some_and(|keys| {
+        keys.contains(evdev::Key::new(KeyCode::KC_A.code()))
+            && keys.contains(evdev::Key::new(KeyCode::KC_Z.code()))
+            && keys.contains(evdev::Key::new(KeyCode::KC_SPC.code()))
+    })
+}
 
 /// Hardware-based keyboard identifier that persists across reboots
 /// Format: vendor:product:version:bustype (e.g., "2e3c:c365:0110:0003")
@@ -89,22 +99,18 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
         HashMap::new();
 
     for (path, device) in evdev::enumerate() {
-        // Check if it has keyboard keys
-        if let Some(keys) = device.supported_keys() {
-            let has_letter_keys = keys.contains(evdev::Key::KEY_A)
-                && keys.contains(evdev::Key::KEY_Z)
-                && keys.contains(evdev::Key::KEY_SPACE);
+        // Check if it's a keyboard device
+        if is_keyboard_device(&device) {
+            let name = device.name().unwrap_or("unknown").to_string();
 
-            if has_letter_keys {
-                let name = device.name().unwrap_or("unknown").to_string();
+            // Skip virtual keyboards created by this daemon
+            if name.contains("Keyboard Middleware Virtual Keyboard") {
+                tracing::debug!("Skipping virtual keyboard: {}", name);
+                continue;
+            }
 
-                // Skip virtual keyboards created by this daemon
-                if name.contains("Keyboard Middleware Virtual Keyboard") {
-                    tracing::debug!("Skipping virtual keyboard: {}", name);
-                    continue;
-                }
-
-                // Skip mice - check for mouse buttons
+            // Skip mice - check for mouse buttons
+            if let Some(keys) = device.supported_keys() {
                 let has_mouse_buttons = keys.contains(evdev::Key::BTN_TOOL_MOUSE)
                     || keys.contains(evdev::Key::BTN_TOOL_FINGER)
                     || keys.contains(evdev::Key::BTN_TOOL_PEN);
@@ -113,37 +119,37 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
                     tracing::debug!("Skipping mouse device (has mouse buttons): {}", name);
                     continue;
                 }
-
-                // Skip mice - check for relative axes (mouse movement)
-                if let Some(rel_axes) = device.supported_relative_axes() {
-                    let has_mouse_axes = rel_axes.contains(evdev::RelativeAxisType::REL_X)
-                        || rel_axes.contains(evdev::RelativeAxisType::REL_Y);
-
-                    if has_mouse_axes {
-                        tracing::debug!("Skipping mouse device (has relative axes): {}", name);
-                        continue;
-                    }
-                }
-
-                // Get base hardware ID (without input number)
-                let id = KeyboardId::from_device(&device);
-
-                // Get input number for sorting
-                let input_num = get_input_number(&path).unwrap_or(999);
-
-                tracing::debug!(
-                    "Found keyboard device: '{}' at {} (ID: {}, input: {})",
-                    name,
-                    path.display(),
-                    id,
-                    input_num
-                );
-
-                device_groups
-                    .entry(id)
-                    .or_default()
-                    .push((path, device, name, input_num));
             }
+
+            // Skip mice - check for relative axes (mouse movement)
+            if let Some(rel_axes) = device.supported_relative_axes() {
+                let has_mouse_axes = rel_axes.contains(evdev::RelativeAxisType::REL_X)
+                    || rel_axes.contains(evdev::RelativeAxisType::REL_Y);
+
+                if has_mouse_axes {
+                    tracing::debug!("Skipping mouse device (has relative axes): {}", name);
+                    continue;
+                }
+            }
+
+            // Get base hardware ID (without input number)
+            let id = KeyboardId::from_device(&device);
+
+            // Get input number for sorting
+            let input_num = get_input_number(&path).unwrap_or(999);
+
+            tracing::debug!(
+                "Found keyboard device: '{}' at {} (ID: {}, input: {})",
+                name,
+                path.display(),
+                id,
+                input_num
+            );
+
+            device_groups
+                .entry(id)
+                .or_default()
+                .push((path, device, name, input_num));
         }
     }
 

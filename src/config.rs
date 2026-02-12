@@ -1,187 +1,7 @@
+use crate::keycode::KeyCode;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-/// QMK-inspired keycode enum
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[allow(non_camel_case_types)]
-pub enum KeyCode {
-    // Letters
-    KC_A,
-    KC_B,
-    KC_C,
-    KC_D,
-    KC_E,
-    KC_F,
-    KC_G,
-    KC_H,
-    KC_I,
-    KC_J,
-    KC_K,
-    KC_L,
-    KC_M,
-    KC_N,
-    KC_O,
-    KC_P,
-    KC_Q,
-    KC_R,
-    KC_S,
-    KC_T,
-    KC_U,
-    KC_V,
-    KC_W,
-    KC_X,
-    KC_Y,
-    KC_Z,
-
-    // Numbers
-    KC_1,
-    KC_2,
-    KC_3,
-    KC_4,
-    KC_5,
-    KC_6,
-    KC_7,
-    KC_8,
-    KC_9,
-    KC_0,
-
-    // Modifiers
-    KC_LCTL,
-    KC_LSFT,
-    KC_LALT,
-    KC_LGUI,
-    KC_LCMD, // KC_LCMD is alias for KC_LGUI
-    KC_RCTL,
-    KC_RSFT,
-    KC_RALT,
-    KC_RGUI,
-    KC_RCMD, // KC_RCMD is alias for KC_RGUI
-
-    // Special keys
-    KC_ESC,
-    KC_CAPS,
-    KC_TAB,
-    KC_SPC,
-    KC_ENT,
-    KC_BSPC,
-    KC_DEL,
-    KC_GRV,
-    KC_MINS,
-    KC_EQL,
-    KC_LBRC,
-    KC_RBRC,
-    KC_BSLS,
-    KC_SCLN,
-    KC_QUOT,
-    KC_COMM,
-    KC_DOT,
-    KC_SLSH,
-
-    // Arrow keys
-    KC_LEFT,
-    KC_DOWN,
-    KC_UP,
-    KC_RGHT,
-
-    // Function keys
-    KC_F1,
-    KC_F2,
-    KC_F3,
-    KC_F4,
-    KC_F5,
-    KC_F6,
-    KC_F7,
-    KC_F8,
-    KC_F9,
-    KC_F10,
-    KC_F11,
-    KC_F12,
-    KC_F13,
-    KC_F14,
-    KC_F15,
-    KC_F16,
-    KC_F17,
-    KC_F18,
-    KC_F19,
-    KC_F20,
-    KC_F21,
-    KC_F22,
-    KC_F23,
-    KC_F24,
-
-    // Navigation keys
-    KC_PGUP,
-    KC_PGDN,
-    KC_HOME,
-    KC_END,
-    KC_INS,
-    KC_PSCR,
-
-    // Numpad keys
-    KC_KP_0,
-    KC_KP_1,
-    KC_KP_2,
-    KC_KP_3,
-    KC_KP_4,
-    KC_KP_5,
-    KC_KP_6,
-    KC_KP_7,
-    KC_KP_8,
-    KC_KP_9,
-    KC_KP_SLASH,
-    KC_KP_ASTERISK,
-    KC_KP_MINUS,
-    KC_KP_PLUS,
-    KC_KP_ENTER,
-    KC_KP_DOT,
-    KC_NUM_LOCK,
-
-    // Media keys
-    KC_MUTE,
-    KC_VOL_UP,
-    KC_VOL_DN,
-    KC_MEDIA_PLAY_PAUSE,
-    KC_MEDIA_STOP,
-    KC_MEDIA_NEXT_TRACK,
-    KC_MEDIA_PREV_TRACK,
-    KC_MEDIA_SELECT,
-
-    // System keys
-    KC_PWR,
-    KC_SLEP,
-    KC_WAKE,
-    KC_CALC,
-    KC_MY_COMP,
-    KC_WWW_SEARCH,
-    KC_WWW_HOME,
-    KC_WWW_BACK,
-    KC_WWW_FORWARD,
-    KC_WWW_STOP,
-    KC_WWW_REFRESH,
-    KC_WWW_FAVORITES,
-
-    // Locking keys
-    KC_SCRL,
-    KC_PAUS,
-
-    // Application keys
-    KC_APP,
-    KC_MENU,
-
-    // Multimedia keys
-    KC_BRIU,
-    KC_BRID,
-    KC_DISPLAY_OFF,
-    KC_WLAN,
-    KC_BLUETOOTH,
-    KC_KEYBOARD_LAYOUT,
-
-    // International keys
-    KC_INTL_BACKSLASH,
-    KC_INTL_YEN,
-    KC_INTL_RO,
-}
 
 /// Layer identifier - fully generic string-based layers
 /// "base" and "game_mode" are reserved layer names
@@ -191,7 +11,7 @@ pub struct Layer(pub String);
 impl Layer {
     /// Base layer (always exists)
     pub fn base() -> Self {
-        Layer("base".to_string())
+        Self("base".to_string())
     }
 
     /// Check if this is the base layer
@@ -201,7 +21,7 @@ impl Layer {
 
     /// Create a new layer from string
     pub fn new(name: impl Into<String>) -> Self {
-        Layer(name.into())
+        Self(name.into())
     }
 }
 
@@ -249,24 +69,24 @@ pub enum Action {
     /// Supports: permissive hold, roll detection, chord detection, adaptive timing
     /// Now fully recursive - can nest any actions!
     /// Example: MT(Key(KC_TAB), TO("nav")) - tap for Tab, hold for nav layer
-    MT(Box<Action>, Box<Action>),
+    MT(Box<Self>, Box<Self>),
     /// Switch to layer
     TO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
     /// When this key is pressed, unpress all opposing keys
     /// Format: SOCD(this_action, [opposing_actions...])
     /// Example: SOCD(Key(KC_W), [Key(KC_S)]) or with the preprocessor: SOCD(KC_W, [KC_S])
-    SOCD(Box<Action>, Vec<Box<Action>>),
+    SOCD(Box<Self>, Vec<Box<Self>>),
     /// OneShot Modifier - tap once, modifier stays active for next keypress only
     /// Perfect for typing capital letters without holding shift
     /// Format: OSM(modifier_action)
     /// Example: OSM(Key(KC_LSFT)) - tap for one-shot shift
-    OSM(Box<Action>),
+    OSM(Box<Self>),
     /// Double-Tap action (QMK-style tap dance)
     /// Single tap: performs first action, Double tap: performs second action
     /// Format: DT(single_tap_action, double_tap_action)
     /// Example: DT(Key(KC_LALT), TO("nav")) - single tap for alt, double tap for nav layer
-    DT(Box<Action>, Box<Action>),
+    DT(Box<Self>, Box<Self>),
     /// Run arbitrary shell command
     /// Example: CMD("/usr/bin/notify-send 'Hello'")
     CMD(String),
@@ -317,6 +137,7 @@ impl GameMode {
 }
 
 /// Per-keyboard override configuration
+///
 /// This has the EXACT same structure as the main Config, but all fields are optional
 /// This allows you to copy the global config and paste it here - it will just override the specified fields
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -409,30 +230,30 @@ pub struct MtConfig {
     pub hold_do_nothing_emits_tap: bool,
 }
 
-fn default_ema_alpha() -> f32 {
+const fn default_ema_alpha() -> f32 {
     0.02
 }
 
-fn default_auto_save_interval() -> u32 {
+const fn default_auto_save_interval() -> u32 {
     30
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
-fn default_multi_mod_threshold() -> usize {
+const fn default_multi_mod_threshold() -> usize {
     2
 }
-fn default_roll_window() -> u32 {
+const fn default_roll_window() -> u32 {
     150
 }
-fn default_chord_window() -> u32 {
+const fn default_chord_window() -> u32 {
     50
 }
-fn default_double_tap_window() -> u32 {
+const fn default_double_tap_window() -> u32 {
     300
 }
-fn default_adaptive_margin() -> u32 {
+const fn default_adaptive_margin() -> u32 {
     30
 }
 
@@ -498,11 +319,11 @@ pub struct Config {
     pub per_keyboard_inherits_global_layout: bool,
 }
 
-fn default_tapping_term() -> u32 {
+const fn default_tapping_term() -> u32 {
     130
 }
 
-fn default_true_bool() -> bool {
+const fn default_true_bool() -> bool {
     true
 }
 
@@ -606,6 +427,7 @@ impl Config {
     /// Get effective config for a specific keyboard
     /// Applies per-keyboard overrides on top of the global config (or replaces it)
     #[must_use]
+    #[allow(clippy::option_if_let_else)] // Complex nested logic, keeping for readability
     pub fn for_keyboard(&self, keyboard_id: &str) -> Self {
         if let Some(override_cfg) = self.per_keyboard_overrides.get(keyboard_id) {
             if self.per_keyboard_inherits_global_layout {
@@ -641,7 +463,7 @@ impl Config {
             } else {
                 // NON-INHERITING MODE: Build from scratch with per-keyboard config only
                 // Use defaults for any fields not specified in per-keyboard config
-                Config {
+                Self {
                     tapping_term_ms: override_cfg
                         .tapping_term_ms
                         .unwrap_or_else(default_tapping_term),
@@ -688,7 +510,7 @@ impl Config {
             let mut in_string = false;
             let mut found_value_start = false;
 
-            for (i, ch) in remaining.chars().enumerate() {
+            for (i, ch) in remaining.char_indices() {
                 match ch {
                     '"' if i == 0
                         || remaining.as_bytes().get(i.wrapping_sub(1)) != Some(&b'\\') =>
@@ -738,20 +560,21 @@ impl Config {
             }
 
             // Generate the new value
-            let new_value = if let Some(ref keyboards) = self.enabled_keyboards {
-                if keyboards.is_empty() {
-                    " Some([])".to_string()
-                } else {
-                    let mut result = " Some([\n".to_string();
-                    for kbd in keyboards {
-                        result.push_str(&format!("        \"{}\",\n", kbd));
+            let new_value = self.enabled_keyboards.as_ref().map_or_else(
+                || " None".to_string(),
+                |keyboards| {
+                    if keyboards.is_empty() {
+                        " Some([])".to_string()
+                    } else {
+                        let mut result = " Some([\n".to_string();
+                        for kbd in keyboards {
+                            result.push_str(&format!("        \"{}\",\n", kbd));
+                        }
+                        result.push_str("    ])");
+                        result
                     }
-                    result.push_str("    ])");
-                    result
-                }
-            } else {
-                " None".to_string()
-            };
+                },
+            );
 
             // Build the new content
             let new_content = format!(

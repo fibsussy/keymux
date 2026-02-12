@@ -1,5 +1,6 @@
 #![allow(clippy::pedantic)]
 
+pub mod keycode;
 pub mod config;
 pub mod daemon_display;
 pub mod display;

@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::keyboard_id::find_all_keyboards;
+use crate::keyboard_id::{find_all_keyboards, is_keyboard_device};
 use colored::Colorize;
 use std::fs;
 use std::path::Path;
@@ -10,6 +10,12 @@ pub struct KeyboardDisplay {
         crate::keyboard_id::LogicalKeyboard,
     )>,
     pub terminal_width: usize,
+}
+
+impl Default for KeyboardDisplay {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl KeyboardDisplay {
@@ -129,6 +135,7 @@ impl KeyboardDisplay {
 
 pub struct ConfigDisplay {
     pub config_path: std::path::PathBuf,
+    #[allow(dead_code)]
     pub terminal_width: usize,
 }
 
@@ -214,7 +221,14 @@ impl ConfigDisplay {
 }
 
 pub struct DeviceDisplay {
+    #[allow(dead_code)]
     pub terminal_width: usize,
+}
+
+impl Default for DeviceDisplay {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DeviceDisplay {
@@ -260,29 +274,22 @@ impl DeviceDisplay {
     fn print_keyboard_devices(&self, event_files: &[std::path::PathBuf]) {
         for event_file in event_files {
             if let Ok(device) = evdev::Device::open(event_file) {
-                // Check if it's a keyboard
-                if let Some(keys) = device.supported_keys() {
-                    let has_letter_keys = keys.contains(evdev::Key::KEY_A)
-                        && keys.contains(evdev::Key::KEY_Z)
-                        && keys.contains(evdev::Key::KEY_SPACE);
+                if is_keyboard_device(&device) {
+                    let display = event_file.display().to_string();
+                    println!("    - {}", display.bright_white());
 
-                    if has_letter_keys {
-                        let display = event_file.display().to_string();
-                        println!("    - {}", display.bright_white());
-
-                        if let Some(name) = device.name() {
-                            println!("      Name: {}", name.dimmed());
-                        }
-
-                        let input_id = device.input_id();
-                        println!(
-                            "      ID: {:04x}:{:04x}:{:04x}:{:04x}",
-                            input_id.vendor(),
-                            input_id.product(),
-                            input_id.version(),
-                            input_id.bus_type().0
-                        );
+                    if let Some(name) = device.name() {
+                        println!("      Name: {}", name.dimmed());
                     }
+
+                    let input_id = device.input_id();
+                    println!(
+                        "      ID: {:04x}:{:04x}:{:04x}:{:04x}",
+                        input_id.vendor(),
+                        input_id.product(),
+                        input_id.version(),
+                        input_id.bus_type().0
+                    );
                 }
             }
         }
@@ -290,7 +297,14 @@ impl DeviceDisplay {
 }
 
 pub struct PermissionsDisplay {
+    #[allow(dead_code)]
     pub terminal_width: usize,
+}
+
+impl Default for PermissionsDisplay {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PermissionsDisplay {
@@ -329,7 +343,14 @@ impl PermissionsDisplay {
 }
 
 pub struct SessionDisplay {
+    #[allow(dead_code)]
     pub terminal_width: usize,
+}
+
+impl Default for SessionDisplay {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionDisplay {

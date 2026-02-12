@@ -1,4 +1,4 @@
-use crate::config::KeyCode;
+use crate::keycode::KeyCode;
 use serde::{Deserialize, Serialize};
 /// Advanced Mod-Tap (MT) system inspired by QMK
 ///
@@ -23,6 +23,7 @@ pub enum Hand {
 
 /// State of an MT key
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum MtKeyState {
     /// Key is undecided (waiting for tap/hold resolution)
     Undecided,
@@ -32,7 +33,7 @@ pub enum MtKeyState {
     Hold,
     /// Resolved to tap and completed
     TapCompleted,
-    /// Resolved to hold and completed  
+    /// Resolved to hold and completed
     HoldCompleted,
     /// Unwrapped to tap (cross-hand unwrap)
     Unwrapped,
@@ -40,6 +41,7 @@ pub enum MtKeyState {
 
 /// MT key tracking state
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MtKey {
     /// Physical keycode
     pub keycode: KeyCode,
@@ -93,7 +95,7 @@ pub struct RollingStats {
 }
 
 impl RollingStats {
-    pub fn new(base_threshold: f32) -> Self {
+    pub const fn new(base_threshold: f32) -> Self {
         Self {
             avg_tap_duration: 0.0,
             tap_sample_count: 0,
@@ -111,7 +113,8 @@ impl RollingStats {
             self.avg_tap_duration = duration_ms;
         } else {
             // Exponential moving average: EMA = α * new_value + (1 - α) * old_EMA
-            self.avg_tap_duration = ALPHA * duration_ms + (1.0 - ALPHA) * self.avg_tap_duration;
+            self.avg_tap_duration =
+                ALPHA.mul_add(duration_ms, (1.0 - ALPHA) * self.avg_tap_duration);
         }
 
         self.tap_sample_count += 1;
@@ -121,10 +124,10 @@ impl RollingStats {
 
         // Smooth the threshold adjustment too
         self.adaptive_threshold =
-            ALPHA * target_threshold + (1.0 - ALPHA) * self.adaptive_threshold;
+            ALPHA.mul_add(target_threshold, (1.0 - ALPHA) * self.adaptive_threshold);
 
         // Clamp threshold to reasonable range [50ms, 500ms]
-        self.adaptive_threshold = self.adaptive_threshold.max(50.0).min(500.0);
+        self.adaptive_threshold = self.adaptive_threshold.clamp(50.0, 500.0);
     }
 }
 
@@ -361,6 +364,7 @@ impl MtProcessor {
     }
 
     /// Set hand for a keycode (for custom layouts)
+    #[allow(dead_code)]
     pub fn set_hand(&mut self, keycode: KeyCode, hand: Hand) {
         self.hand_map.insert(keycode, hand);
     }
@@ -608,17 +612,15 @@ impl MtProcessor {
 
     /// Resolve undecided key to tap
     fn resolve_to_tap(&mut self, keycode: KeyCode) -> Option<MtResolution> {
-        if let Some(mut mt_key) = self.undecided_keys.remove(&keycode) {
+        self.undecided_keys.remove(&keycode).map(|mut mt_key| {
             mt_key.state = MtKeyState::Tap;
 
             // Emit tap immediately
-            Some(MtResolution {
+            MtResolution {
                 keycode,
                 action: MtAction::TapPress(mt_key.tap_key),
-            })
-        } else {
-            None
-        }
+            }
+        })
     }
 
     /// Resolve undecided key to hold
@@ -707,7 +709,7 @@ impl MtProcessor {
         }
 
         // Clamp to [0, 1]
-        score.max(0.0).min(1.0)
+        score.clamp(0.0, 1.0)
     }
 
     /// Get adaptive threshold for a key based on tap statistics
@@ -753,16 +755,19 @@ impl MtProcessor {
     }
 
     /// Check if any keys are pending (for external permissive hold logic)
+    #[allow(dead_code)]
     pub fn has_pending_keys(&self) -> bool {
         !self.undecided_keys.is_empty()
     }
 
     /// Get count of undecided keys
+    #[allow(dead_code)]
     pub fn undecided_count(&self) -> usize {
         self.undecided_keys.len()
     }
 
     /// Get adaptive stats for display/debugging
+    #[allow(dead_code)]
     pub fn get_adaptive_stats(&self) -> Vec<(KeyCode, &RollingStats)> {
         self.rolling_stats
             .iter()
@@ -879,6 +884,7 @@ impl MtProcessor {
 
 /// MT resolution result
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct MtResolution {
     /// The MT keycode that was resolved
     pub keycode: KeyCode,

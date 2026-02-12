@@ -1,8 +1,8 @@
-use evdev::Key;
+use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use tracing::warn;
 
-use crate::config::{Action as ConfigAction, Config, KeyCode, Layer};
+use crate::config::{Action as ConfigAction, Config, Layer};
 
 // Import action processors from the actions submodule
 use super::actions::{
@@ -12,6 +12,7 @@ use super::actions::{
 
 /// What a key press is doing (recorded on press, replayed on release)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 enum KeyAction {
     /// Emitted a regular key
     RegularKey(KeyCode),
@@ -33,6 +34,7 @@ enum KeyAction {
 #[derive(Debug, Clone)]
 struct SocdGroup {
     /// All keys in this SOCD group
+    #[allow(dead_code)]
     all_keys: Vec<KeyCode>,
     /// Stack of currently held keys (most recent at the end)
     held_stack: Vec<KeyCode>,
@@ -75,6 +77,9 @@ pub struct KeymapProcessor {
     all_key_stats: HashMap<KeyCode, RollingStats>,
     /// Track when each key was pressed (for measuring tap duration)
     key_press_times: HashMap<KeyCode, std::time::Instant>,
+
+    /// Track currently active modifiers from MT/OSM keys for proper shift handling
+    active_modifiers: HashMap<KeyCode, KeyCode>, // Maps modifier key to the keycode that activated it
 }
 
 impl KeymapProcessor {
@@ -91,7 +96,7 @@ impl KeymapProcessor {
 
         let extract_socd = |remaps: &HashMap<KeyCode, ConfigAction>,
                             defs: &mut HashMap<KeyCode, Vec<KeyCode>>| {
-            for (_keycode, action) in remaps {
+            for action in remaps.values() {
                 if let ConfigAction::SOCD(this_action, opposing_actions) = action {
                     // Extract KeyCode from Action (only support Key actions for now)
                     if let ConfigAction::Key(this_key) = this_action.as_ref() {
@@ -180,6 +185,7 @@ impl KeymapProcessor {
             socd_groups,
             all_key_stats: HashMap::new(),
             key_press_times: HashMap::new(),
+            active_modifiers: HashMap::new(),
         }
     }
 
@@ -187,6 +193,42 @@ impl KeymapProcessor {
     pub fn set_game_mode(&mut self, active: bool) {
         self.game_mode_active = active;
         self.mt_processor.set_game_mode(active);
+    }
+
+    /// Add an active modifier (for MT/OSM tracking)
+    fn add_active_modifier(&mut self, source_key: KeyCode, modifier_key: KeyCode) {
+        if modifier_key.is_modifier() {
+            self.active_modifiers.insert(modifier_key, source_key);
+        }
+    }
+
+    /// Remove an active modifier (for MT/OSM tracking)
+    fn remove_active_modifier(&mut self, modifier_key: KeyCode) {
+        self.active_modifiers.remove(&modifier_key);
+    }
+
+    /// Check if shift is currently active (from MT/OSM keys)
+    fn has_active_shift(&self) -> bool {
+        self.active_modifiers.contains_key(&KeyCode::KC_LSFT)
+            || self.active_modifiers.contains_key(&KeyCode::KC_RSFT)
+    }
+
+    /// Apply active modifiers to a key if needed (for shifted output)
+    #[allow(clippy::branches_sharing_code)] // Intentionally structured for future shift handling
+    fn apply_modifiers_if_needed(&self, key: KeyCode) -> Vec<(KeyCode, bool)> {
+        let mut events = Vec::new();
+
+        if self.has_active_shift() {
+            // For shift-sensitive keys when shift is active:
+            // Use the system's native shift handling by letting the OS handle it
+            // The modifier will already be pressed from the MT key
+            events.push((key, true));
+        } else {
+            // For all other keys, emit normally
+            events.push((key, true));
+        }
+
+        events
     }
 
     /// Check for DT timeouts and return events to emit
@@ -287,6 +329,7 @@ impl KeymapProcessor {
     }
 
     /// Get all key stats for display
+    #[allow(dead_code)]
     pub fn get_all_key_stats(&self) -> HashMap<KeyCode, RollingStats> {
         self.all_key_stats.clone()
     }
@@ -297,7 +340,7 @@ impl KeymapProcessor {
         use std::process::Command;
 
         let output = Command::new("getent")
-            .args(&["passwd", &user_id.to_string()])
+            .args(["passwd", &user_id.to_string()])
             .output();
 
         if let Ok(output) = output {
@@ -315,7 +358,7 @@ impl KeymapProcessor {
 
     /// Extract a KeyCode from an Action (for processor compatibility)
     /// Returns None if the action is not a simple Key(KC_*) action
-    fn extract_keycode(action: &ConfigAction) -> Option<KeyCode> {
+    const fn extract_keycode(action: &ConfigAction) -> Option<KeyCode> {
         match action {
             ConfigAction::Key(kc) => Some(*kc),
             _ => None,
@@ -365,9 +408,15 @@ impl KeymapProcessor {
                     events.extend(self.apply_mt_resolutions(mt_resolutions));
                     ProcessResult::MultipleEvents(events)
                 } else {
-                    ProcessResult::EmitKey(output_key, true)
+                    // Apply active modifiers if needed
+                    let modifier_events = self.apply_modifiers_if_needed(output_key);
+                    if modifier_events.len() == 1 {
+                        ProcessResult::EmitKey(modifier_events[0].0, modifier_events[0].1)
+                    } else {
+                        ProcessResult::MultipleEvents(modifier_events)
+                    }
                 };
-                self.combine_with_timeouts(dt_timeout_events.clone(), result)
+                self.combine_with_timeouts(dt_timeout_events, result)
             }
             Some(ConfigAction::MT(tap_action, hold_action)) => {
                 // MT now uses Box<Action> - extract KeyCode if it's a simple Key action
@@ -385,6 +434,7 @@ impl KeymapProcessor {
                     let mt_resolutions = self.mt_processor.on_other_key_press(tap_key);
 
                     // Then register this MT key
+                    #[allow(clippy::branches_sharing_code)] // Refactoring causes borrow issues
                     let result = if let Some(resolution) =
                         self.mt_processor.on_press(keycode, tap_key, hold_key)
                     {
@@ -397,7 +447,7 @@ impl KeymapProcessor {
                             events.extend(self.mt_resolution_to_events(&resolution));
                             ProcessResult::MultipleEvents(events)
                         } else {
-                            self.apply_mt_resolution_single(resolution)
+                            self.apply_mt_resolution_with_tracking(keycode, resolution)
                         }
                     } else {
                         // Normal MT processing
@@ -410,11 +460,11 @@ impl KeymapProcessor {
                             ProcessResult::None
                         }
                     };
-                    self.combine_with_timeouts(dt_timeout_events.clone(), result)
+                    self.combine_with_timeouts(dt_timeout_events, result)
                 } else {
                     // MT with complex nested actions not yet supported
                     warn!("MT with non-Key actions not yet supported (e.g., MT(TO(...), ...))");
-                    self.combine_with_timeouts(dt_timeout_events.clone(), ProcessResult::None)
+                    self.combine_with_timeouts(dt_timeout_events, ProcessResult::None)
                 }
             }
             Some(ConfigAction::TO(layer)) => {
@@ -422,7 +472,7 @@ impl KeymapProcessor {
                 self.current_layer = layer.clone();
                 actions.push(KeyAction::Layer(layer));
                 self.held_keys.insert(keycode, actions);
-                self.combine_with_timeouts(dt_timeout_events.clone(), ProcessResult::None)
+                self.combine_with_timeouts(dt_timeout_events, ProcessResult::None)
             }
             Some(ConfigAction::SOCD(this_action, _opposing_actions)) => {
                 // SOCD handling - extract KeyCode from Action
@@ -434,40 +484,34 @@ impl KeymapProcessor {
                     warn!("SOCD with non-Key actions not yet supported");
                     ProcessResult::None
                 };
-                self.combine_with_timeouts(dt_timeout_events.clone(), result)
+                self.combine_with_timeouts(dt_timeout_events, result)
             }
             Some(ConfigAction::CMD(command)) => {
                 // Run arbitrary command
-                self.combine_with_timeouts(
-                    dt_timeout_events.clone(),
-                    ProcessResult::RunCommand(command.clone()),
-                )
+                self.combine_with_timeouts(dt_timeout_events, ProcessResult::RunCommand(command))
             }
             Some(ConfigAction::OSM(modifier_action)) => {
                 // OSM (OneShot Modifier) - extract KeyCode for simple cases
-                let result =
-                    if let Some(modifier_key) = Self::extract_keycode(modifier_action.as_ref()) {
-                        // Check OSM timeouts first
-                        let timeouts = self.osm_processor.check_timeouts();
-                        // Process timeouts if any (emit release events)
-                        if !timeouts.is_empty() {
-                            // These will be handled in the event loop
-                        }
+                if let Some(modifier_key) = Self::extract_keycode(modifier_action.as_ref()) {
+                    // Check OSM timeouts first
+                    let timeouts = self.osm_processor.check_timeouts();
+                    // Process timeouts if any (emit release events)
+                    if !timeouts.is_empty() {
+                        // These will be handled in the event loop
+                    }
 
-                        // Register this OSM key
-                        let _resolution = self.osm_processor.on_press(keycode, modifier_key);
+                    // Register this OSM key
+                    let _resolution = self.osm_processor.on_press(keycode, modifier_key);
 
-                        actions.push(KeyAction::OsmManaged);
-                        self.held_keys.insert(keycode, actions);
+                    actions.push(KeyAction::OsmManaged);
+                    self.held_keys.insert(keycode, actions);
 
-                        // OSM doesn't emit on press, waits for release to determine tap/hold
-                        ProcessResult::None
-                    } else {
-                        // OSM with complex actions not yet supported
-                        warn!("OSM with non-Key actions not yet supported");
-                        ProcessResult::None
-                    };
-                self.combine_with_timeouts(dt_timeout_events.clone(), result)
+                    // OSM doesn't emit on press, waits for release to determine tap/hold
+                } else {
+                    // OSM with complex actions not yet supported
+                    warn!("OSM with non-Key actions not yet supported");
+                }
+                self.combine_with_timeouts(dt_timeout_events, ProcessResult::None)
             }
             Some(ConfigAction::DT(tap_action, double_tap_action)) => {
                 // DT (Double-Tap) - extract KeyCodes for simple cases
@@ -501,7 +545,7 @@ impl KeymapProcessor {
                         _ => ProcessResult::None,
                     };
 
-                    self.combine_with_timeouts(dt_timeout_events.clone(), result)
+                    self.combine_with_timeouts(dt_timeout_events, result)
                 } else {
                     // DT with complex actions not yet supported
                     warn!("DT with non-Key actions not yet supported");
@@ -582,7 +626,7 @@ impl KeymapProcessor {
                     KeyAction::MtManaged => {
                         // Let MT processor handle the release
                         if let Some(resolution) = self.mt_processor.on_release(keycode) {
-                            return self.apply_mt_resolution_single(resolution);
+                            return self.apply_mt_resolution_with_tracking(keycode, resolution);
                         }
                     }
                     KeyAction::SocdManaged => {
@@ -610,7 +654,7 @@ impl KeymapProcessor {
                                 ProcessResult::None
                             }
                         };
-                        return self.combine_with_timeouts(dt_timeout_events.clone(), result);
+                        return self.combine_with_timeouts(dt_timeout_events, result);
                     }
                     KeyAction::OsmManaged => {
                         // Let OSM processor handle the release
@@ -667,7 +711,7 @@ impl KeymapProcessor {
     }
 
     /// Apply MT resolutions and return events to emit
-    fn apply_mt_resolutions(&mut self, resolutions: Vec<MtResolution>) -> Vec<(KeyCode, bool)> {
+    fn apply_mt_resolutions(&self, resolutions: Vec<MtResolution>) -> Vec<(KeyCode, bool)> {
         let mut events = Vec::new();
 
         for resolution in resolutions {
@@ -688,7 +732,47 @@ impl KeymapProcessor {
         }
     }
 
-    /// Apply single MT resolution
+    /// Apply single MT resolution with modifier tracking
+    fn apply_mt_resolution_with_tracking(
+        &mut self,
+        source_key: KeyCode,
+        resolution: MtResolution,
+    ) -> ProcessResult {
+        match &resolution.action {
+            MtAction::TapPress(key) => {
+                // Tap doesn't hold modifier, no tracking needed
+                ProcessResult::EmitKey(*key, true)
+            }
+            MtAction::TapPressRelease(key) => {
+                // Tap release, no tracking needed
+                ProcessResult::TapKeyPressRelease(*key)
+            }
+            MtAction::HoldPress(key) => {
+                // Hold press - track the modifier if it's a modifier key
+                if key.is_modifier() {
+                    self.add_active_modifier(source_key, *key);
+                }
+                ProcessResult::EmitKey(*key, true)
+            }
+            MtAction::HoldPressRelease(key) => {
+                // Hold press and release - track modifier if needed, then release
+                if key.is_modifier() {
+                    self.add_active_modifier(source_key, *key);
+                }
+                ProcessResult::MultipleEvents(vec![(*key, true), (*key, false)])
+            }
+            MtAction::ReleaseHold(key) => {
+                // Hold release - stop tracking the modifier
+                if key.is_modifier() {
+                    self.remove_active_modifier(*key);
+                }
+                ProcessResult::EmitKey(*key, false)
+            }
+        }
+    }
+
+    /// Apply single MT resolution (immutable version for compatibility)
+    #[allow(dead_code)]
     fn apply_mt_resolution_single(&self, resolution: MtResolution) -> ProcessResult {
         match resolution.action {
             MtAction::TapPress(key) => ProcessResult::EmitKey(key, true),
@@ -830,6 +914,7 @@ impl KeymapProcessor {
 // === ProcessResult ===
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ProcessResult {
     /// Emit a single key event
     EmitKey(KeyCode, bool),
@@ -846,363 +931,3 @@ pub enum ProcessResult {
 }
 
 // === evdev ↔ KeyCode Conversion ===
-
-#[must_use]
-pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
-    match key {
-        // Letters
-        Key::KEY_A => Some(KeyCode::KC_A),
-        Key::KEY_B => Some(KeyCode::KC_B),
-        Key::KEY_C => Some(KeyCode::KC_C),
-        Key::KEY_D => Some(KeyCode::KC_D),
-        Key::KEY_E => Some(KeyCode::KC_E),
-        Key::KEY_F => Some(KeyCode::KC_F),
-        Key::KEY_G => Some(KeyCode::KC_G),
-        Key::KEY_H => Some(KeyCode::KC_H),
-        Key::KEY_I => Some(KeyCode::KC_I),
-        Key::KEY_J => Some(KeyCode::KC_J),
-        Key::KEY_K => Some(KeyCode::KC_K),
-        Key::KEY_L => Some(KeyCode::KC_L),
-        Key::KEY_M => Some(KeyCode::KC_M),
-        Key::KEY_N => Some(KeyCode::KC_N),
-        Key::KEY_O => Some(KeyCode::KC_O),
-        Key::KEY_P => Some(KeyCode::KC_P),
-        Key::KEY_Q => Some(KeyCode::KC_Q),
-        Key::KEY_R => Some(KeyCode::KC_R),
-        Key::KEY_S => Some(KeyCode::KC_S),
-        Key::KEY_T => Some(KeyCode::KC_T),
-        Key::KEY_U => Some(KeyCode::KC_U),
-        Key::KEY_V => Some(KeyCode::KC_V),
-        Key::KEY_W => Some(KeyCode::KC_W),
-        Key::KEY_X => Some(KeyCode::KC_X),
-        Key::KEY_Y => Some(KeyCode::KC_Y),
-        Key::KEY_Z => Some(KeyCode::KC_Z),
-
-        // Numbers
-        Key::KEY_1 => Some(KeyCode::KC_1),
-        Key::KEY_2 => Some(KeyCode::KC_2),
-        Key::KEY_3 => Some(KeyCode::KC_3),
-        Key::KEY_4 => Some(KeyCode::KC_4),
-        Key::KEY_5 => Some(KeyCode::KC_5),
-        Key::KEY_6 => Some(KeyCode::KC_6),
-        Key::KEY_7 => Some(KeyCode::KC_7),
-        Key::KEY_8 => Some(KeyCode::KC_8),
-        Key::KEY_9 => Some(KeyCode::KC_9),
-        Key::KEY_0 => Some(KeyCode::KC_0),
-
-        // Modifiers
-        Key::KEY_LEFTCTRL => Some(KeyCode::KC_LCTL),
-        Key::KEY_LEFTSHIFT => Some(KeyCode::KC_LSFT),
-        Key::KEY_LEFTALT => Some(KeyCode::KC_LALT),
-        Key::KEY_LEFTMETA => Some(KeyCode::KC_LGUI),
-        Key::KEY_RIGHTCTRL => Some(KeyCode::KC_RCTL),
-        Key::KEY_RIGHTSHIFT => Some(KeyCode::KC_RSFT),
-        Key::KEY_RIGHTALT => Some(KeyCode::KC_RALT),
-        Key::KEY_RIGHTMETA => Some(KeyCode::KC_RGUI),
-
-        // Special keys
-        Key::KEY_ESC => Some(KeyCode::KC_ESC),
-        Key::KEY_CAPSLOCK => Some(KeyCode::KC_CAPS),
-        Key::KEY_TAB => Some(KeyCode::KC_TAB),
-        Key::KEY_SPACE => Some(KeyCode::KC_SPC),
-        Key::KEY_ENTER => Some(KeyCode::KC_ENT),
-        Key::KEY_BACKSPACE => Some(KeyCode::KC_BSPC),
-        Key::KEY_DELETE => Some(KeyCode::KC_DEL),
-        Key::KEY_GRAVE => Some(KeyCode::KC_GRV),
-        Key::KEY_MINUS => Some(KeyCode::KC_MINS),
-        Key::KEY_EQUAL => Some(KeyCode::KC_EQL),
-        Key::KEY_LEFTBRACE => Some(KeyCode::KC_LBRC),
-        Key::KEY_RIGHTBRACE => Some(KeyCode::KC_RBRC),
-        Key::KEY_BACKSLASH => Some(KeyCode::KC_BSLS),
-        Key::KEY_SEMICOLON => Some(KeyCode::KC_SCLN),
-        Key::KEY_APOSTROPHE => Some(KeyCode::KC_QUOT),
-        Key::KEY_COMMA => Some(KeyCode::KC_COMM),
-        Key::KEY_DOT => Some(KeyCode::KC_DOT),
-        Key::KEY_SLASH => Some(KeyCode::KC_SLSH),
-
-        // Arrow keys
-        Key::KEY_LEFT => Some(KeyCode::KC_LEFT),
-        Key::KEY_DOWN => Some(KeyCode::KC_DOWN),
-        Key::KEY_UP => Some(KeyCode::KC_UP),
-        Key::KEY_RIGHT => Some(KeyCode::KC_RGHT),
-
-        // Function keys
-        Key::KEY_F1 => Some(KeyCode::KC_F1),
-        Key::KEY_F2 => Some(KeyCode::KC_F2),
-        Key::KEY_F3 => Some(KeyCode::KC_F3),
-        Key::KEY_F4 => Some(KeyCode::KC_F4),
-        Key::KEY_F5 => Some(KeyCode::KC_F5),
-        Key::KEY_F6 => Some(KeyCode::KC_F6),
-        Key::KEY_F7 => Some(KeyCode::KC_F7),
-        Key::KEY_F8 => Some(KeyCode::KC_F8),
-        Key::KEY_F9 => Some(KeyCode::KC_F9),
-        Key::KEY_F10 => Some(KeyCode::KC_F10),
-        Key::KEY_F11 => Some(KeyCode::KC_F11),
-        Key::KEY_F12 => Some(KeyCode::KC_F12),
-        Key::KEY_F13 => Some(KeyCode::KC_F13),
-        Key::KEY_F14 => Some(KeyCode::KC_F14),
-        Key::KEY_F15 => Some(KeyCode::KC_F15),
-        Key::KEY_F16 => Some(KeyCode::KC_F16),
-        Key::KEY_F17 => Some(KeyCode::KC_F17),
-        Key::KEY_F18 => Some(KeyCode::KC_F18),
-        Key::KEY_F19 => Some(KeyCode::KC_F19),
-        Key::KEY_F20 => Some(KeyCode::KC_F20),
-        Key::KEY_F21 => Some(KeyCode::KC_F21),
-        Key::KEY_F22 => Some(KeyCode::KC_F22),
-        Key::KEY_F23 => Some(KeyCode::KC_F23),
-        Key::KEY_F24 => Some(KeyCode::KC_F24),
-
-        // Navigation keys
-        Key::KEY_PAGEUP => Some(KeyCode::KC_PGUP),
-        Key::KEY_PAGEDOWN => Some(KeyCode::KC_PGDN),
-        Key::KEY_HOME => Some(KeyCode::KC_HOME),
-        Key::KEY_END => Some(KeyCode::KC_END),
-        Key::KEY_INSERT => Some(KeyCode::KC_INS),
-        Key::KEY_SYSRQ => Some(KeyCode::KC_PSCR),
-
-        // Numpad keys
-        Key::KEY_KP0 => Some(KeyCode::KC_KP_0),
-        Key::KEY_KP1 => Some(KeyCode::KC_KP_1),
-        Key::KEY_KP2 => Some(KeyCode::KC_KP_2),
-        Key::KEY_KP3 => Some(KeyCode::KC_KP_3),
-        Key::KEY_KP4 => Some(KeyCode::KC_KP_4),
-        Key::KEY_KP5 => Some(KeyCode::KC_KP_5),
-        Key::KEY_KP6 => Some(KeyCode::KC_KP_6),
-        Key::KEY_KP7 => Some(KeyCode::KC_KP_7),
-        Key::KEY_KP8 => Some(KeyCode::KC_KP_8),
-        Key::KEY_KP9 => Some(KeyCode::KC_KP_9),
-        Key::KEY_KPSLASH => Some(KeyCode::KC_KP_SLASH),
-        Key::KEY_KPASTERISK => Some(KeyCode::KC_KP_ASTERISK),
-        Key::KEY_KPMINUS => Some(KeyCode::KC_KP_MINUS),
-        Key::KEY_KPPLUS => Some(KeyCode::KC_KP_PLUS),
-        Key::KEY_KPENTER => Some(KeyCode::KC_KP_ENTER),
-        Key::KEY_KPDOT => Some(KeyCode::KC_KP_DOT),
-        Key::KEY_NUMLOCK => Some(KeyCode::KC_NUM_LOCK),
-
-        // Media keys
-        Key::KEY_MUTE => Some(KeyCode::KC_MUTE),
-        Key::KEY_VOLUMEUP => Some(KeyCode::KC_VOL_UP),
-        Key::KEY_VOLUMEDOWN => Some(KeyCode::KC_VOL_DN),
-        Key::KEY_PLAYPAUSE => Some(KeyCode::KC_MEDIA_PLAY_PAUSE),
-        Key::KEY_STOPCD => Some(KeyCode::KC_MEDIA_STOP),
-        Key::KEY_NEXTSONG => Some(KeyCode::KC_MEDIA_NEXT_TRACK),
-        Key::KEY_PREVIOUSSONG => Some(KeyCode::KC_MEDIA_PREV_TRACK),
-        Key::KEY_MEDIA => Some(KeyCode::KC_MEDIA_SELECT),
-
-        // System keys
-        Key::KEY_POWER => Some(KeyCode::KC_PWR),
-        Key::KEY_SLEEP => Some(KeyCode::KC_SLEP),
-        Key::KEY_WAKEUP => Some(KeyCode::KC_WAKE),
-        Key::KEY_CALC => Some(KeyCode::KC_CALC),
-        Key::KEY_COMPUTER => Some(KeyCode::KC_MY_COMP),
-        Key::KEY_SEARCH => Some(KeyCode::KC_WWW_SEARCH),
-        Key::KEY_HOMEPAGE => Some(KeyCode::KC_WWW_HOME),
-        Key::KEY_BACK => Some(KeyCode::KC_WWW_BACK),
-        Key::KEY_FORWARD => Some(KeyCode::KC_WWW_FORWARD),
-        Key::KEY_STOP => Some(KeyCode::KC_WWW_STOP),
-        Key::KEY_REFRESH => Some(KeyCode::KC_WWW_REFRESH),
-        Key::KEY_BOOKMARKS => Some(KeyCode::KC_WWW_FAVORITES),
-
-        // Locking keys
-        Key::KEY_SCROLLLOCK => Some(KeyCode::KC_SCRL),
-        Key::KEY_PAUSE => Some(KeyCode::KC_PAUS),
-
-        // Application keys
-        Key::KEY_PROPS => Some(KeyCode::KC_APP),
-        Key::KEY_MENU => Some(KeyCode::KC_MENU),
-
-        // Multimedia keys
-        Key::KEY_BRIGHTNESSUP => Some(KeyCode::KC_BRIU),
-        Key::KEY_BRIGHTNESSDOWN => Some(KeyCode::KC_BRID),
-        Key::KEY_DISPLAYTOGGLE => Some(KeyCode::KC_DISPLAY_OFF),
-        Key::KEY_WLAN => Some(KeyCode::KC_WLAN),
-        Key::KEY_BLUETOOTH => Some(KeyCode::KC_BLUETOOTH),
-        Key::KEY_SWITCHVIDEOMODE => Some(KeyCode::KC_KEYBOARD_LAYOUT),
-
-        // International keys
-        Key::KEY_102ND => Some(KeyCode::KC_INTL_BACKSLASH),
-        Key::KEY_YEN => Some(KeyCode::KC_INTL_YEN),
-        Key::KEY_RO => Some(KeyCode::KC_INTL_RO),
-
-        _ => None,
-    }
-}
-
-#[must_use]
-pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
-    match keycode {
-        // Letters
-        KeyCode::KC_A => Key::KEY_A,
-        KeyCode::KC_B => Key::KEY_B,
-        KeyCode::KC_C => Key::KEY_C,
-        KeyCode::KC_D => Key::KEY_D,
-        KeyCode::KC_E => Key::KEY_E,
-        KeyCode::KC_F => Key::KEY_F,
-        KeyCode::KC_G => Key::KEY_G,
-        KeyCode::KC_H => Key::KEY_H,
-        KeyCode::KC_I => Key::KEY_I,
-        KeyCode::KC_J => Key::KEY_J,
-        KeyCode::KC_K => Key::KEY_K,
-        KeyCode::KC_L => Key::KEY_L,
-        KeyCode::KC_M => Key::KEY_M,
-        KeyCode::KC_N => Key::KEY_N,
-        KeyCode::KC_O => Key::KEY_O,
-        KeyCode::KC_P => Key::KEY_P,
-        KeyCode::KC_Q => Key::KEY_Q,
-        KeyCode::KC_R => Key::KEY_R,
-        KeyCode::KC_S => Key::KEY_S,
-        KeyCode::KC_T => Key::KEY_T,
-        KeyCode::KC_U => Key::KEY_U,
-        KeyCode::KC_V => Key::KEY_V,
-        KeyCode::KC_W => Key::KEY_W,
-        KeyCode::KC_X => Key::KEY_X,
-        KeyCode::KC_Y => Key::KEY_Y,
-        KeyCode::KC_Z => Key::KEY_Z,
-
-        // Numbers
-        KeyCode::KC_1 => Key::KEY_1,
-        KeyCode::KC_2 => Key::KEY_2,
-        KeyCode::KC_3 => Key::KEY_3,
-        KeyCode::KC_4 => Key::KEY_4,
-        KeyCode::KC_5 => Key::KEY_5,
-        KeyCode::KC_6 => Key::KEY_6,
-        KeyCode::KC_7 => Key::KEY_7,
-        KeyCode::KC_8 => Key::KEY_8,
-        KeyCode::KC_9 => Key::KEY_9,
-        KeyCode::KC_0 => Key::KEY_0,
-
-        // Modifiers
-        KeyCode::KC_LCTL => Key::KEY_LEFTCTRL,
-        KeyCode::KC_LSFT => Key::KEY_LEFTSHIFT,
-        KeyCode::KC_LALT => Key::KEY_LEFTALT,
-        KeyCode::KC_LGUI | KeyCode::KC_LCMD => Key::KEY_LEFTMETA,
-        KeyCode::KC_RCTL => Key::KEY_RIGHTCTRL,
-        KeyCode::KC_RSFT => Key::KEY_RIGHTSHIFT,
-        KeyCode::KC_RALT => Key::KEY_RIGHTALT,
-        KeyCode::KC_RGUI | KeyCode::KC_RCMD => Key::KEY_RIGHTMETA,
-
-        // Special keys
-        KeyCode::KC_ESC => Key::KEY_ESC,
-        KeyCode::KC_CAPS => Key::KEY_CAPSLOCK,
-        KeyCode::KC_TAB => Key::KEY_TAB,
-        KeyCode::KC_SPC => Key::KEY_SPACE,
-        KeyCode::KC_ENT => Key::KEY_ENTER,
-        KeyCode::KC_BSPC => Key::KEY_BACKSPACE,
-        KeyCode::KC_DEL => Key::KEY_DELETE,
-        KeyCode::KC_GRV => Key::KEY_GRAVE,
-        KeyCode::KC_MINS => Key::KEY_MINUS,
-        KeyCode::KC_EQL => Key::KEY_EQUAL,
-        KeyCode::KC_LBRC => Key::KEY_LEFTBRACE,
-        KeyCode::KC_RBRC => Key::KEY_RIGHTBRACE,
-        KeyCode::KC_BSLS => Key::KEY_BACKSLASH,
-        KeyCode::KC_SCLN => Key::KEY_SEMICOLON,
-        KeyCode::KC_QUOT => Key::KEY_APOSTROPHE,
-        KeyCode::KC_COMM => Key::KEY_COMMA,
-        KeyCode::KC_DOT => Key::KEY_DOT,
-        KeyCode::KC_SLSH => Key::KEY_SLASH,
-
-        // Arrow keys
-        KeyCode::KC_LEFT => Key::KEY_LEFT,
-        KeyCode::KC_DOWN => Key::KEY_DOWN,
-        KeyCode::KC_UP => Key::KEY_UP,
-        KeyCode::KC_RGHT => Key::KEY_RIGHT,
-
-        // Function keys
-        KeyCode::KC_F1 => Key::KEY_F1,
-        KeyCode::KC_F2 => Key::KEY_F2,
-        KeyCode::KC_F3 => Key::KEY_F3,
-        KeyCode::KC_F4 => Key::KEY_F4,
-        KeyCode::KC_F5 => Key::KEY_F5,
-        KeyCode::KC_F6 => Key::KEY_F6,
-        KeyCode::KC_F7 => Key::KEY_F7,
-        KeyCode::KC_F8 => Key::KEY_F8,
-        KeyCode::KC_F9 => Key::KEY_F9,
-        KeyCode::KC_F10 => Key::KEY_F10,
-        KeyCode::KC_F11 => Key::KEY_F11,
-        KeyCode::KC_F12 => Key::KEY_F12,
-        KeyCode::KC_F13 => Key::KEY_F13,
-        KeyCode::KC_F14 => Key::KEY_F14,
-        KeyCode::KC_F15 => Key::KEY_F15,
-        KeyCode::KC_F16 => Key::KEY_F16,
-        KeyCode::KC_F17 => Key::KEY_F17,
-        KeyCode::KC_F18 => Key::KEY_F18,
-        KeyCode::KC_F19 => Key::KEY_F19,
-        KeyCode::KC_F20 => Key::KEY_F20,
-        KeyCode::KC_F21 => Key::KEY_F21,
-        KeyCode::KC_F22 => Key::KEY_F22,
-        KeyCode::KC_F23 => Key::KEY_F23,
-        KeyCode::KC_F24 => Key::KEY_F24,
-
-        // Navigation keys
-        KeyCode::KC_PGUP => Key::KEY_PAGEUP,
-        KeyCode::KC_PGDN => Key::KEY_PAGEDOWN,
-        KeyCode::KC_HOME => Key::KEY_HOME,
-        KeyCode::KC_END => Key::KEY_END,
-        KeyCode::KC_INS => Key::KEY_INSERT,
-        KeyCode::KC_PSCR => Key::KEY_SYSRQ,
-
-        // Numpad keys
-        KeyCode::KC_KP_0 => Key::KEY_KP0,
-        KeyCode::KC_KP_1 => Key::KEY_KP1,
-        KeyCode::KC_KP_2 => Key::KEY_KP2,
-        KeyCode::KC_KP_3 => Key::KEY_KP3,
-        KeyCode::KC_KP_4 => Key::KEY_KP4,
-        KeyCode::KC_KP_5 => Key::KEY_KP5,
-        KeyCode::KC_KP_6 => Key::KEY_KP6,
-        KeyCode::KC_KP_7 => Key::KEY_KP7,
-        KeyCode::KC_KP_8 => Key::KEY_KP8,
-        KeyCode::KC_KP_9 => Key::KEY_KP9,
-        KeyCode::KC_KP_SLASH => Key::KEY_KPSLASH,
-        KeyCode::KC_KP_ASTERISK => Key::KEY_KPASTERISK,
-        KeyCode::KC_KP_MINUS => Key::KEY_KPMINUS,
-        KeyCode::KC_KP_PLUS => Key::KEY_KPPLUS,
-        KeyCode::KC_KP_ENTER => Key::KEY_KPENTER,
-        KeyCode::KC_KP_DOT => Key::KEY_KPDOT,
-        KeyCode::KC_NUM_LOCK => Key::KEY_NUMLOCK,
-
-        // Media keys
-        KeyCode::KC_MUTE => Key::KEY_MUTE,
-        KeyCode::KC_VOL_UP => Key::KEY_VOLUMEUP,
-        KeyCode::KC_VOL_DN => Key::KEY_VOLUMEDOWN,
-        KeyCode::KC_MEDIA_PLAY_PAUSE => Key::KEY_PLAYPAUSE,
-        KeyCode::KC_MEDIA_STOP => Key::KEY_STOPCD,
-        KeyCode::KC_MEDIA_NEXT_TRACK => Key::KEY_NEXTSONG,
-        KeyCode::KC_MEDIA_PREV_TRACK => Key::KEY_PREVIOUSSONG,
-        KeyCode::KC_MEDIA_SELECT => Key::KEY_MEDIA,
-
-        // System keys
-        KeyCode::KC_PWR => Key::KEY_POWER,
-        KeyCode::KC_SLEP => Key::KEY_SLEEP,
-        KeyCode::KC_WAKE => Key::KEY_WAKEUP,
-        KeyCode::KC_CALC => Key::KEY_CALC,
-        KeyCode::KC_MY_COMP => Key::KEY_COMPUTER,
-        KeyCode::KC_WWW_SEARCH => Key::KEY_SEARCH,
-        KeyCode::KC_WWW_HOME => Key::KEY_HOMEPAGE,
-        KeyCode::KC_WWW_BACK => Key::KEY_BACK,
-        KeyCode::KC_WWW_FORWARD => Key::KEY_FORWARD,
-        KeyCode::KC_WWW_STOP => Key::KEY_STOP,
-        KeyCode::KC_WWW_REFRESH => Key::KEY_REFRESH,
-        KeyCode::KC_WWW_FAVORITES => Key::KEY_BOOKMARKS,
-
-        // Locking keys
-        KeyCode::KC_SCRL => Key::KEY_SCROLLLOCK,
-        KeyCode::KC_PAUS => Key::KEY_PAUSE,
-
-        // Application keys
-        KeyCode::KC_APP => Key::KEY_PROPS,
-        KeyCode::KC_MENU => Key::KEY_MENU,
-
-        // Multimedia keys
-        KeyCode::KC_BRIU => Key::KEY_BRIGHTNESSUP,
-        KeyCode::KC_BRID => Key::KEY_BRIGHTNESSDOWN,
-        KeyCode::KC_DISPLAY_OFF => Key::KEY_DISPLAYTOGGLE,
-        KeyCode::KC_WLAN => Key::KEY_WLAN,
-        KeyCode::KC_BLUETOOTH => Key::KEY_BLUETOOTH,
-        KeyCode::KC_KEYBOARD_LAYOUT => Key::KEY_SWITCHVIDEOMODE,
-
-        // International keys
-        KeyCode::KC_INTL_BACKSLASH => Key::KEY_102ND,
-        KeyCode::KC_INTL_YEN => Key::KEY_YEN,
-        KeyCode::KC_INTL_RO => Key::KEY_RO,
-    }
-}

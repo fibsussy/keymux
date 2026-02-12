@@ -10,12 +10,13 @@
 /// - Auto-releases after next non-modifier keypress
 /// - Can stack multiple one-shots
 /// - Timeout prevents accidental stuck modifiers
-use crate::config::KeyCode;
+use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
 
 /// State of a one-shot modifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum OsmState {
     /// Pressed, waiting to see if it's a tap or hold
     Pressed,
@@ -29,6 +30,7 @@ pub enum OsmState {
 
 /// OneShot modifier tracking
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct OsmKey {
     /// Physical keycode
     pub keycode: KeyCode,
@@ -145,11 +147,12 @@ impl OsmProcessor {
 
     /// Called when ANY other key is pressed
     /// Returns modifiers that should be released after this key
+    #[allow(dead_code)]
     pub fn on_other_key_press(&mut self, keycode: KeyCode) -> Vec<(KeyCode, OsmResolution)> {
         let mut resolutions = Vec::new();
 
         // Don't consume one-shot on modifier keys
-        if self.is_modifier(keycode) {
+        if keycode.is_modifier() {
             return resolutions;
         }
 
@@ -166,6 +169,7 @@ impl OsmProcessor {
 
     /// Called when ANY other key is released
     /// Returns modifiers that should be released now
+    #[allow(dead_code)]
     pub fn on_other_key_release(&mut self, _keycode: KeyCode) -> Vec<(KeyCode, OsmResolution)> {
         let mut resolutions = Vec::new();
 
@@ -217,24 +221,6 @@ impl OsmProcessor {
         resolutions
     }
 
-    /// Check if a keycode is a modifier key
-    fn is_modifier(&self, keycode: KeyCode) -> bool {
-        matches!(
-            keycode,
-            KeyCode::KC_LCTL
-                | KeyCode::KC_RCTL
-                | KeyCode::KC_LSFT
-                | KeyCode::KC_RSFT
-                | KeyCode::KC_LALT
-                | KeyCode::KC_RALT
-                | KeyCode::KC_LGUI
-                | KeyCode::KC_RGUI
-                | KeyCode::KC_LCMD
-                | KeyCode::KC_RCMD
-        )
-    }
-
-    /// Get count of active one-shots (for debugging)
     pub fn active_count(&self) -> usize {
         self.active_oneshots.len()
     }

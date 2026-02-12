@@ -5,6 +5,12 @@ pub struct DaemonDisplay {
     pub terminal_width: usize,
 }
 
+impl Default for DaemonDisplay {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DaemonDisplay {
     pub fn new() -> Self {
         Self {
@@ -13,8 +19,6 @@ impl DaemonDisplay {
     }
 
     pub fn print_daemon_status(&self) {
-        use crate::keyboard_id::find_all_keyboards;
-
         println!("{}", "📡 Daemon Status:".bright_yellow().bold());
 
         match send_request(&IpcRequest::Ping) {

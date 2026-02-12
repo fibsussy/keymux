@@ -78,6 +78,7 @@ mod display;
 mod event_processor;
 mod ipc;
 mod keyboard_id;
+pub mod keycode;
 mod list;
 mod niri;
 mod session_manager;
@@ -188,7 +189,7 @@ fn main() -> Result<()> {
             toggle::run_toggle()?;
         }
         Some(Commands::Gamemode { action }) => {
-            handle_gamemode_action(&action)?;
+            handle_gamemode_action(action)?;
         }
         Some(Commands::Reload) => {
             run_reload()?;
@@ -357,8 +358,9 @@ fn clear_adaptive_stats() -> Result<()> {
 
 fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
     use colored::Colorize;
-    use config::{Config, KeyCode};
-    use event_processor::actions::modtap::{MtConfig as ModtapConfig, MtProcessor};
+    use config::Config;
+
+    use keycode::KeyCode;
 
     println!();
     println!(
@@ -500,7 +502,8 @@ fn show_adaptive_stats(config_path: Option<&std::path::Path>) -> Result<()> {
 }
 
 fn validate_config(config_path: Option<&std::path::Path>) -> Result<()> {
-    use config::{Action, Config, KeyCode};
+    use config::{Action, Config};
+    use keycode::KeyCode;
     use std::collections::{HashMap, HashSet};
 
     println!();
@@ -845,14 +848,11 @@ fn run_niri_daemon() -> Result<()> {
         match niri_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(niri::NiriEvent::WindowFocusChanged(_window_info)) => {
                 // Get all windows and check if any focused window should enable game mode
-                let should_enable = match window::get_all_windows() {
-                    Ok(windows) => windows
-                        .iter()
-                        .find(|w| w.is_focused)
-                        .map(|w| matches!(w.game_mode_state(), window::GameModeState::GameMode(_)))
-                        .unwrap_or(false),
-                    Err(_) => false,
-                };
+                let should_enable = window::get_all_windows().is_ok_and(|windows| {
+                    windows.iter().find(|w| w.is_focused).is_some_and(|w| {
+                        matches!(w.game_mode_state(), window::GameModeState::GameMode(_))
+                    })
+                });
 
                 // Only send IPC if state changed
                 if should_enable != current_game_mode {
@@ -896,8 +896,6 @@ fn run_niri_daemon() -> Result<()> {
 
 /// Handle gamemode CLI commands
 fn handle_gamemode_action(action: &GamemodeAction) -> Result<()> {
-    use colored::Colorize;
-
     match action {
         GamemodeAction::Window { action } => {
             handle_window_gamemode_action(action)?;

@@ -1,6 +1,5 @@
 use anyhow::Result;
 use colored::Colorize;
-use std::env;
 
 use crate::config::Config;
 use crate::daemon_display::DaemonDisplay;
@@ -82,7 +81,7 @@ pub fn run_debug() -> Result<()> {
             let mut max_title_width = 5; // "Title"
             let mut max_app_id_width = 7; // "App ID"
             let mut max_pid_width = 3; // "PID"
-            let mut max_focused_width = 7; // "Focused"
+            let max_focused_width = 7; // "Focused"
             let mut max_game_mode_width = 9; // "Game Mode"
 
             for (window, game_state) in &windows_with_gamemode {
@@ -175,9 +174,7 @@ pub fn run_debug() -> Result<()> {
                 for window in &windows {
                     let game_state = window.game_mode_state();
                     let game_info = match game_state {
-                        GameModeState::Normal => {
-                            format!("○ Normal")
-                        }
+                        GameModeState::Normal => "○ Normal".to_string(),
                         GameModeState::GameMode(reason) => {
                             format!("✓ {}", reason.bright_green())
                         }

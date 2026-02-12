@@ -1,31 +1,28 @@
+use crate::config::Config;
+use crate::keyboard_id::KeyboardId;
+use crate::keycode::KeyCode;
 use anyhow::{Context, Result};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
+use keymap::ProcessResult as ProcResult;
+pub use keymap::{KeymapProcessor, ProcessResult};
 use std::os::unix::io::AsRawFd;
 use std::thread;
 use tracing::{debug, error, info, warn};
+
+pub mod actions;
+pub mod keymap;
 
 // SYN event constants
 const SYN_REPORT: i32 = 0;
 const SYN_CODE: u16 = 0;
 
-use crate::config::Config;
-use crate::keyboard_id::KeyboardId;
-
-// Sub-modules in this directory
-pub mod actions;
-pub mod keymap;
-
-// Re-export for backwards compatibility
-pub use keymap::{evdev_to_keycode, keycode_to_evdev, KeymapProcessor, ProcessResult};
-
-// Internal use
-use keymap::{keycode_to_evdev as kc_to_evdev, ProcessResult as ProcResult};
-
 /// Process events from a physical keyboard and output to virtual device
+///
 /// Returns immediately after spawning thread
 /// `shutdown_rx`: Receiver to signal thread shutdown
 /// `game_mode_rx`: Receiver to signal game mode toggle
+#[allow(clippy::too_many_arguments)]
 pub fn start_event_processor(
     keyboard_id: KeyboardId,
     mut device: Device,
@@ -55,6 +52,7 @@ pub fn start_event_processor(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_event_processor(
     keyboard_id: &KeyboardId,
     device: &mut Device,
@@ -174,7 +172,7 @@ fn run_event_processor(
                     // Process key events through keymap
                     if ev.event_type() == evdev::EventType::KEY {
                         // Convert evdev key code to our KeyCode enum
-                        if let Some(input_key) = evdev_to_keycode(Key::new(ev.code())) {
+                        if let Some(input_key) = KeyCode::from_evdev_code(ev.code()) {
                             let pressed = ev.value() == 1; // 1 = press, 0 = release, 2 = repeat
                             let repeat = ev.value() == 2;
 
@@ -189,7 +187,7 @@ fn run_event_processor(
                             match result {
                                 ProcessResult::EmitKey(output_key, output_pressed) => {
                                     // Convert back to evdev and emit
-                                    let output_evdev = keycode_to_evdev(output_key);
+                                    let output_evdev = Key::new(output_key.code());
                                     let output_event = InputEvent::new_now(
                                         ev.event_type(),
                                         output_evdev.code(),
@@ -203,7 +201,7 @@ fn run_event_processor(
                                 }
                                 ProcessResult::TapKeyPressRelease(tap_key) => {
                                     // Emit tap key press and release
-                                    let key_evdev = keycode_to_evdev(tap_key);
+                                    let key_evdev = Key::new(tap_key.code());
                                     let press_event =
                                         InputEvent::new_now(ev.event_type(), key_evdev.code(), 1);
                                     virtual_device.emit(&[press_event])?;
@@ -217,7 +215,7 @@ fn run_event_processor(
                                 ProcessResult::MultipleEvents(events) => {
                                     // Emit multiple events in sequence
                                     for (key, pressed) in events {
-                                        let key_evdev = keycode_to_evdev(key);
+                                        let key_evdev = Key::new(key.code());
                                         let event = InputEvent::new_now(
                                             ev.event_type(),
                                             key_evdev.code(),
@@ -281,7 +279,7 @@ fn run_event_processor(
                     ProcResult::MultipleEvents(events) => {
                         // Emit timeout events (hold first action, single-tap, etc.)
                         for (key, pressed) in events {
-                            let key_evdev = kc_to_evdev(key);
+                            let key_evdev = Key::new(key.code());
                             let event = InputEvent::new_now(
                                 EventType::KEY,
                                 key_evdev.code(),
@@ -419,7 +417,7 @@ fn release_all_keys(virtual_device: &mut VirtualDevice, keymap: &KeymapProcessor
 
         // Release all held keys
         for keycode in held_keys {
-            let evdev_key = keycode_to_evdev(keycode);
+            let evdev_key = Key::new(keycode.code());
             let event = InputEvent::new_now(EventType::KEY, evdev_key.code(), 0);
             let _ = virtual_device.emit(&[event]);
         }
