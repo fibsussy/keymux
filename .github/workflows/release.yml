@@ -91,8 +91,8 @@ jobs:
         with:
           name: keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}
           path: |
-            keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-            keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256
+            keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz
+            keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.sha256
 
   # Only after ALL builds succeed, commit version and create release
   commit-and-release:
