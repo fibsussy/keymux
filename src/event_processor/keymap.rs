@@ -404,8 +404,10 @@ impl KeymapProcessor {
                 // Notify MT processor (for permissive hold)
                 let mt_resolutions = self.mt_processor.on_other_key_press(output_key);
                 let result = if !mt_resolutions.is_empty() {
-                    let mut events = vec![(output_key, true)];
-                    events.extend(self.apply_mt_resolutions(mt_resolutions));
+                    // Emit MT resolutions FIRST (modifiers), then the current key
+                    // This ensures shift is pressed before the key that needs shifting
+                    let mut events = self.apply_mt_resolutions(mt_resolutions);
+                    events.push((output_key, true));
                     ProcessResult::MultipleEvents(events)
                 } else {
                     // Apply active modifiers if needed
