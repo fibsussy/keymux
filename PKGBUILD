@@ -33,7 +33,18 @@ package() {
 
     install -Dm644 "keymux.service" "$pkgdir/usr/lib/systemd/system/keymux.service"
     install -Dm644 "keymux-niri.service" "$pkgdir/usr/lib/systemd/user/keymux-niri.service"
-    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-    install -Dm644 "../LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-    install -d "$pkgdir/etc/keymux"
+    install -Dm644 "config.example.ron" "$pkgdir/usr/share/doc/keymux/config.example.ron"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/keymux/README.md"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/keymux/LICENSE"
+    
+    # Generate shell completions
+    install -dm755 "$pkgdir/usr/share/bash-completion/completions"
+    install -dm755 "$pkgdir/usr/share/zsh/site-functions"
+    install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"
+    
+    "$pkgdir/usr/bin/keymux" completion bash > "$pkgdir/usr/share/bash-completion/completions/keymux"
+    "$pkgdir/usr/bin/keymux" completion zsh > "$pkgdir/usr/share/zsh/site-functions/_keymux"
+    "$pkgdir/usr/bin/keymux" completion fish > "$pkgdir/usr/share/fish/vendor_completions.d/keymux.fish"
+    
+    install -dm755 "$pkgdir/etc/skel/.config/keymux"
 }

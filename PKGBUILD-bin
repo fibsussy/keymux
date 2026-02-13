@@ -22,12 +22,14 @@ package() {
     cd "$srcdir"
     
     local binary_name="keymux"
-    local extracted_binary="keymux"
     
-    install -Dm755 "$extracted_binary" "$pkgdir/usr/bin/$binary_name"
-    
-    # Note: Service files and config need to be downloaded separately from the git repository
-    # This is a minimal binary package - full installation uses the git PKGBUILD
+    # Files are extracted by makepkg to $srcdir, install them directly
+    install -Dm755 "keymux" "$pkgdir/usr/bin/$binary_name"
+    install -Dm644 "keymux.service" "$pkgdir/usr/lib/systemd/system/$binary_name.service"
+    install -Dm644 "keymux-niri.service" "$pkgdir/usr/lib/systemd/user/$binary_name-niri.service"
+    install -Dm644 "config.example.ron" "$pkgdir/usr/share/doc/$binary_name/config.example.ron"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$binary_name/README.md"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$binary_name/LICENSE"
     
     # Generate shell completions using the installed binary
     install -dm755 "$pkgdir/usr/share/bash-completion/completions"
