@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-git
-pkgver=1.0.4
+pkgver=1.0.5
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (git version)"
 arch=('x86_64' 'aarch64')
