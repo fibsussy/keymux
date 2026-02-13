@@ -113,6 +113,12 @@ jobs:
           cp artifacts/version-files/PKGBUILD .
           cp artifacts/version-files/PKGBUILD-bin .
           cp artifacts/version-files/PKGBUILD-git .
+      - name: Update PKGBUILD-bin checksums
+        run: |
+          X86_64_SHA=$(cat artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.sha256 | cut -d' ' -f1)
+          AARCH64_SHA=$(cat artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.sha256 | cut -d' ' -f1)
+          sed -i "s/sha256sums_x86_64=('.*')/sha256sums_x86_64=('$X86_64_SHA')/" PKGBUILD-bin
+          sed -i "s/sha256sums_aarch64=('.*')/sha256sums_aarch64=('$AARCH64_SHA')/" PKGBUILD-bin
       - name: Commit version bump and create tag
         run: |
           git config user.name "GitHub Action"
