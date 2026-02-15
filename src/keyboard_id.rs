@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::keycode::KeyCode;
 use evdev::Device;
 use std::collections::HashMap;

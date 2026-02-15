@@ -2,7 +2,7 @@
 ///
 /// Provides async event handling for hotplug, IPC, config changes, and session management
 /// while maintaining synchronous event processors for zero-latency key processing.
-use crate::config_manager::ConfigManager;
+use crate::config::ConfigManager;
 use crate::event_processor;
 use crate::ipc::{get_root_socket_path, IpcRequest, IpcResponse};
 use crate::keyboard_id::{find_all_keyboards, KeyboardId};

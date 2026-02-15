@@ -22,7 +22,7 @@ impl KeyboardDisplay {
     pub fn new() -> Self {
         Self {
             logical_keyboards: find_all_keyboards().into_iter().collect(),
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 
@@ -143,7 +143,7 @@ impl ConfigDisplay {
     pub fn new(config_path: std::path::PathBuf) -> Self {
         Self {
             config_path,
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 
@@ -234,7 +234,7 @@ impl Default for DeviceDisplay {
 impl DeviceDisplay {
     pub fn new() -> Self {
         Self {
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 
@@ -310,7 +310,7 @@ impl Default for PermissionsDisplay {
 impl PermissionsDisplay {
     pub fn new() -> Self {
         Self {
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 
@@ -356,7 +356,7 @@ impl Default for SessionDisplay {
 impl SessionDisplay {
     pub fn new() -> Self {
         Self {
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 

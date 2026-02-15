@@ -14,7 +14,7 @@ impl Default for DaemonDisplay {
 impl DaemonDisplay {
     pub fn new() -> Self {
         Self {
-            terminal_width: crate::window::get_terminal_width(),
+            terminal_width: crate::ui::window::get_terminal_width(),
         }
     }
 

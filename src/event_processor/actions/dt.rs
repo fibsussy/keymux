@@ -23,9 +23,12 @@
 /// - Single-tap emits when double_tap_window expires (even if no other key pressed)
 /// - Hold activates at tapping_term (typically < double_tap_window)
 /// - Double-tap must complete within double_tap_window from first press
+use crate::config::{Config, KeyAction};
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
+
+use super::handlers::ProcessResult;
 
 /// State of a double-tap key
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,9 +134,12 @@ pub struct DtProcessor {
 
 impl DtProcessor {
     /// Create new DT processor
-    pub fn new(config: DtConfig) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
-            config,
+            config: DtConfig {
+                tapping_term_ms: config.tapping_term_ms,
+                double_tap_window_ms: config.double_tap_window_ms.unwrap_or(250),
+            },
             tracked_keys: HashMap::new(),
         }
     }
@@ -263,5 +269,78 @@ impl DtProcessor {
     #[allow(dead_code)]
     pub fn tracked_count(&self) -> usize {
         self.tracked_keys.len()
+    }
+
+    // === Handler methods for keymap.rs ===
+
+    pub fn handle_press(
+        &mut self,
+        keycode: KeyCode,
+        tap_key: KeyCode,
+        dtap_key: KeyCode,
+    ) -> Vec<(KeyCode, bool)> {
+        let resolution = self.on_press(keycode, tap_key, dtap_key);
+        self.resolution_to_events(resolution)
+    }
+
+    pub fn handle_release(&mut self, keycode: KeyCode) -> DtResolution {
+        self.on_release(keycode)
+    }
+
+    pub fn handle_check_timeouts(&mut self) -> Vec<(KeyCode, bool)> {
+        let timeouts = self.check_timeouts();
+        self.process_timeouts(timeouts)
+    }
+
+    pub fn resolution_to_events(&self, resolution: DtResolution) -> Vec<(KeyCode, bool)> {
+        match resolution {
+            DtResolution::HoldFirst(key) => vec![(key, true)],
+            DtResolution::TapFirst(key) => vec![(key, true), (key, false)],
+            DtResolution::PressSecond(key) => vec![(key, true)],
+            DtResolution::ReleaseFirst(key) => vec![(key, false)],
+            DtResolution::ReleaseSecond(key) => vec![(key, false)],
+            DtResolution::Undecided => Vec::new(),
+        }
+    }
+
+    fn process_timeouts(&self, timeouts: Vec<(KeyCode, DtResolution)>) -> Vec<(KeyCode, bool)> {
+        let mut events = Vec::new();
+        for (_keycode, resolution) in timeouts {
+            events.extend(self.resolution_to_events(resolution));
+        }
+        events
+    }
+}
+
+const fn extract_keycode(action: &KeyAction) -> Option<KeyCode> {
+    match action {
+        KeyAction::Key(kc) => Some(*kc),
+        _ => None,
+    }
+}
+
+pub fn handle_dt_action(
+    dt_processor: &mut DtProcessor,
+    keycode: KeyCode,
+    tap_action: &KeyAction,
+    double_tap_action: &KeyAction,
+) -> Vec<(KeyCode, bool)> {
+    let tap_key = extract_keycode(tap_action);
+    let dtap_key = extract_keycode(double_tap_action);
+
+    if let (Some(tap_key), Some(dtap_key)) = (tap_key, dtap_key) {
+        dt_processor.handle_press(keycode, tap_key, dtap_key)
+    } else {
+        Vec::new()
+    }
+}
+
+pub fn handle_dt_release(dt_processor: &mut DtProcessor, _keycode: KeyCode) -> ProcessResult {
+    let resolution = dt_processor.handle_release(_keycode);
+    match resolution {
+        DtResolution::ReleaseFirst(key) => ProcessResult::EmitKey(key, false),
+        DtResolution::ReleaseSecond(key) => ProcessResult::EmitKey(key, false),
+        DtResolution::Undecided => ProcessResult::None,
+        _ => ProcessResult::None,
     }
 }

@@ -10,9 +10,12 @@
 /// - Auto-releases after next non-modifier keypress
 /// - Can stack multiple one-shots
 /// - Timeout prevents accidental stuck modifiers
+use crate::config::{Config, KeyAction};
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
+
+use super::handlers::ProcessResult;
 
 /// State of a one-shot modifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,12 +107,29 @@ pub struct OsmProcessor {
 
 impl OsmProcessor {
     /// Create new OSM processor
-    pub fn new(config: OsmConfig) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
-            config,
+            config: OsmConfig {
+                oneshot_timeout_ms: config.oneshot_timeout_ms.unwrap_or(5000),
+                tapping_term_ms: config.tapping_term_ms,
+            },
             tracked_keys: HashMap::new(),
             active_oneshots: HashMap::new(),
         }
+    }
+
+    pub fn handle_press(&mut self, keycode: KeyCode, modifier_key: KeyCode) -> OsmResolution {
+        let _timeouts = self.check_timeouts();
+        let _resolution = self.on_press(keycode, modifier_key);
+        OsmResolution::None
+    }
+
+    pub fn handle_release(&mut self, keycode: KeyCode) -> OsmResolution {
+        self.on_release(keycode)
+    }
+
+    pub fn handle_check_timeouts(&mut self) -> Vec<(KeyCode, OsmResolution)> {
+        self.check_timeouts()
     }
 
     /// Handle OSM key press
@@ -221,7 +241,35 @@ impl OsmProcessor {
         resolutions
     }
 
+    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
         self.active_oneshots.len()
+    }
+}
+
+const fn extract_keycode(action: &KeyAction) -> Option<KeyCode> {
+    match action {
+        KeyAction::Key(kc) => Some(*kc),
+        _ => None,
+    }
+}
+
+pub fn handle_osm_action(
+    osm_processor: &mut OsmProcessor,
+    keycode: KeyCode,
+    modifier_action: &KeyAction,
+) -> OsmResolution {
+    if let Some(modifier_key) = extract_keycode(modifier_action) {
+        let _ = osm_processor.handle_press(keycode, modifier_key);
+    }
+    OsmResolution::None
+}
+
+pub fn handle_osm_release(osm_processor: &mut OsmProcessor, _keycode: KeyCode) -> ProcessResult {
+    let resolution = osm_processor.handle_release(_keycode);
+    match resolution {
+        OsmResolution::ActivateModifier(mod_key) => ProcessResult::EmitKey(mod_key, true),
+        OsmResolution::ReleaseModifier(mod_key) => ProcessResult::EmitKey(mod_key, false),
+        OsmResolution::None => ProcessResult::None,
     }
 }

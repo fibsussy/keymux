@@ -1,3 +1,4 @@
+use crate::config::{Config, KeyAction};
 use crate::keycode::KeyCode;
 use serde::{Deserialize, Serialize};
 /// Advanced Mod-Tap (MT) system inspired by QMK
@@ -253,9 +254,25 @@ pub struct MtProcessor {
 
 impl MtProcessor {
     /// Create new MT processor
-    pub fn new(config: MtConfig) -> Self {
+    pub fn new(config: &Config) -> Self {
         Self {
-            config,
+            config: MtConfig {
+                tapping_term_ms: config.tapping_term_ms,
+                permissive_hold: config.mt_config.permissive_hold,
+                same_hand_roll_detection: config.mt_config.same_hand_roll_detection,
+                opposite_hand_chord_detection: config.mt_config.opposite_hand_chord_detection,
+                multi_mod_detection: config.mt_config.multi_mod_detection,
+                multi_mod_threshold: config.mt_config.multi_mod_threshold,
+                adaptive_timing: config.mt_config.adaptive_timing,
+                predictive_scoring: config.mt_config.predictive_scoring,
+                roll_detection_window_ms: config.mt_config.roll_detection_window_ms,
+                chord_detection_window_ms: config.mt_config.chord_detection_window_ms,
+                double_tap_then_hold: config.mt_config.double_tap_then_hold,
+                double_tap_window_ms: config.mt_config.double_tap_window_ms,
+                cross_hand_unwrap: config.mt_config.cross_hand_unwrap,
+                adaptive_target_margin_ms: config.mt_config.adaptive_target_margin_ms,
+                hold_do_nothing_emits_tap: config.mt_config.hold_do_nothing_emits_tap,
+            },
             undecided_keys: HashMap::new(),
             held_keys: HashMap::new(),
             rolling_stats: HashMap::new(),
@@ -905,4 +922,77 @@ pub enum MtAction {
     HoldPressRelease(KeyCode),
     /// Release hold key
     ReleaseHold(KeyCode),
+}
+
+impl MtProcessor {
+    pub fn handle_press(
+        &mut self,
+        keycode: KeyCode,
+        tap_key: KeyCode,
+        hold_key: KeyCode,
+    ) -> (Vec<(KeyCode, bool)>, Option<MtResolution>) {
+        let other_resolutions = self.on_other_key_press(tap_key);
+        let mut events = self.resolutions_to_events(&other_resolutions);
+
+        if let Some(resolution) = self.on_press(keycode, tap_key, hold_key) {
+            events.extend(self.resolution_to_events(&resolution));
+            (events, None)
+        } else if !other_resolutions.is_empty() {
+            (events, None)
+        } else {
+            (Vec::new(), None)
+        }
+    }
+
+    pub fn handle_release(&mut self, keycode: KeyCode) -> Option<MtResolution> {
+        self.on_release(keycode)
+    }
+
+    pub fn resolution_to_events(&self, resolution: &MtResolution) -> Vec<(KeyCode, bool)> {
+        match resolution.action {
+            MtAction::TapPress(key) => vec![(key, true)],
+            MtAction::TapPressRelease(key) => vec![(key, true), (key, false)],
+            MtAction::HoldPress(key) => vec![(key, true)],
+            MtAction::HoldPressRelease(key) => vec![(key, true), (key, false)],
+            MtAction::ReleaseHold(key) => vec![(key, false)],
+        }
+    }
+
+    pub fn resolutions_to_events(&self, resolutions: &[MtResolution]) -> Vec<(KeyCode, bool)> {
+        let mut events = Vec::new();
+        for resolution in resolutions {
+            events.extend(self.resolution_to_events(resolution));
+        }
+        events
+    }
+
+    pub fn on_other_key_press_for_resolutions(
+        &mut self,
+        other_keycode: KeyCode,
+    ) -> Vec<MtResolution> {
+        self.on_other_key_press(other_keycode)
+    }
+}
+
+const fn extract_keycode(action: &KeyAction) -> Option<KeyCode> {
+    match action {
+        KeyAction::Key(kc) => Some(*kc),
+        _ => None,
+    }
+}
+
+pub fn handle_mt_action(
+    mt_processor: &mut MtProcessor,
+    keycode: KeyCode,
+    tap_action: &KeyAction,
+    hold_action: &KeyAction,
+) -> (Vec<(KeyCode, bool)>, Option<MtResolution>) {
+    let tap_key_opt = extract_keycode(tap_action);
+    let hold_key_opt = extract_keycode(hold_action);
+
+    if let (Some(tap_key), Some(hold_key)) = (tap_key_opt, hold_key_opt) {
+        mt_processor.handle_press(keycode, tap_key, hold_key)
+    } else {
+        (Vec::new(), None)
+    }
 }

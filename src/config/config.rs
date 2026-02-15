@@ -61,7 +61,7 @@ impl<'de> serde::Deserialize<'de> for Layer {
 
 /// Key action - what happens when a key is pressed
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Action {
+pub enum KeyAction {
     /// Direct key mapping
     Key(KeyCode),
     /// QMK-style Mod-Tap: advanced tap/hold with configurable behavior
@@ -72,6 +72,10 @@ pub enum Action {
     MT(Box<Self>, Box<Self>),
     /// Switch to layer
     TO(Layer),
+    /// Toggle layer (press to activate, press again to deactivate)
+    TG(Layer),
+    /// Momentary layer - hold for layer
+    MO(Layer),
     /// SOCD (Simultaneous Opposite Cardinal Direction) - fully generic
     /// When this key is pressed, unpress all opposing keys
     /// Format: SOCD(this_action, [opposing_actions...])
@@ -90,6 +94,30 @@ pub enum Action {
     /// Run arbitrary shell command
     /// Example: CMD("/usr/bin/notify-send 'Hello'")
     CMD(String),
+    /// Transparent - fall through to lower layer
+    /// Like QMK's underscore key - ignores this position on current layer
+    /// and looks it up on the next layer down (or base)
+    Transparent,
+}
+
+impl KeyAction {
+    /// Check if this action is Transparent
+    pub const fn is_transparent(&self) -> bool {
+        matches!(self, Self::Transparent)
+    }
+
+    /// Check if this action is a layer switch (To, Tg, Mo)
+    pub const fn is_layer_action(&self) -> bool {
+        matches!(self, Self::TO(_) | Self::TG(_) | Self::MO(_))
+    }
+
+    /// Extract layer from layer actions
+    pub const fn get_layer(&self) -> Option<&Layer> {
+        match self {
+            Self::TO(layer) | Self::TG(layer) | Self::MO(layer) => Some(layer),
+            _ => None,
+        }
+    }
 }
 
 /// Game mode detection methods
@@ -104,14 +132,14 @@ pub enum DetectionMethod {
 /// Layer configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayerConfig {
-    pub remaps: HashMap<KeyCode, Action>,
+    pub remaps: HashMap<KeyCode, KeyAction>,
 }
 
 /// Game mode configuration
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GameMode {
     #[serde(default)]
-    pub remaps: HashMap<KeyCode, Action>,
+    pub remaps: HashMap<KeyCode, KeyAction>,
 }
 
 impl GameMode {
@@ -146,7 +174,7 @@ pub struct PerKeyboardConfig {
     pub mt_config: Option<MtConfig>,
     pub double_tap_window_ms: Option<u64>,
     pub oneshot_timeout_ms: Option<u64>,
-    pub remaps: Option<HashMap<KeyCode, Action>>,
+    pub remaps: Option<HashMap<KeyCode, KeyAction>>,
     pub layers: Option<HashMap<Layer, LayerConfig>>,
     pub game_mode: Option<GameMode>,
 }
@@ -291,7 +319,7 @@ pub struct Config {
     #[serde(default)]
     pub enabled_keyboards: Option<Vec<String>>,
     #[serde(default)]
-    pub remaps: HashMap<KeyCode, Action>,
+    pub remaps: HashMap<KeyCode, KeyAction>,
     #[serde(default)]
     pub layers: HashMap<Layer, LayerConfig>,
     #[serde(default)]
@@ -602,12 +630,12 @@ impl Config {
         // Validation 1: Check SOCD pairs are symmetric
         let mut socd_map: HashMap<KeyCode, KeyCode> = HashMap::new();
 
-        let mut extract_socd = |remaps: &HashMap<KeyCode, Action>| {
+        let mut extract_socd = |remaps: &HashMap<KeyCode, KeyAction>| {
             let mut pairs = Vec::new();
             for (key, action) in remaps {
-                if let Action::SOCD(this_action, opposing_actions) = action {
+                if let KeyAction::SOCD(this_action, opposing_actions) = action {
                     // Extract KeyCode from Action (only validate Key actions)
-                    if let Action::Key(this_key) = this_action.as_ref() {
+                    if let KeyAction::Key(this_key) = this_action.as_ref() {
                         if key != this_key {
                             errors.push(format!(
                                 "SOCD key mismatch: {:?} maps to SOCD({:?}, ...)",
@@ -615,7 +643,7 @@ impl Config {
                             ));
                         }
                         for opposing_action in opposing_actions {
-                            if let Action::Key(opposing_key) = opposing_action.as_ref() {
+                            if let KeyAction::Key(opposing_key) = opposing_action.as_ref() {
                                 pairs.push((*this_key, *opposing_key));
                             }
                         }
@@ -679,10 +707,10 @@ impl Config {
         // Validation 3: Check layer references
         let mut referenced_layers = HashSet::new();
 
-        let extract_layer_refs = |remaps: &HashMap<KeyCode, Action>| {
+        let extract_layer_refs = |remaps: &HashMap<KeyCode, KeyAction>| {
             let mut refs = Vec::new();
             for action in remaps.values() {
-                if let Action::TO(layer) = action {
+                if let KeyAction::TO(layer) = action {
                     refs.push(layer.0.clone());
                 }
             }

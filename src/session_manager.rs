@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Session Manager - Multi-user keyboard ownership
 ///
 /// Manages keyboard ownership across multiple user sessions, implementing
@@ -29,6 +31,12 @@ pub struct SessionManager {
     keyboard_owners: Arc<RwLock<HashMap<KeyboardId, u32>>>,
     /// Map of UID to user session info
     user_sessions: Arc<RwLock<HashMap<u32, UserSession>>>,
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl SessionManager {

@@ -2,9 +2,9 @@ use anyhow::Result;
 use colored::Colorize;
 use dialoguer::MultiSelect;
 
-use crate::config::Config;
-use crate::ipc::{send_request, IpcRequest, IpcResponse};
-use crate::keyboard_id::{find_all_keyboards, KeyboardId};
+use keymux::config::Config;
+use keymux::ipc::{send_request, IpcRequest, IpcResponse};
+use keymux::keyboard_id::{find_all_keyboards, KeyboardId};
 
 pub fn run_toggle() -> Result<()> {
     println!();

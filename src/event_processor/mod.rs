@@ -1,17 +1,20 @@
 use crate::config::Config;
 use crate::keyboard_id::KeyboardId;
 use crate::keycode::KeyCode;
+use actions::ProcessResult as ProcResult;
+pub use actions::ProcessResult;
 use anyhow::{Context, Result};
 use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
-use keymap::ProcessResult as ProcResult;
-pub use keymap::{KeymapProcessor, ProcessResult};
+pub use keymap::KeymapProcessor;
 use std::os::unix::io::AsRawFd;
 use std::thread;
 use tracing::{debug, error, info, warn};
 
 pub mod actions;
+pub mod adaptive;
 pub mod keymap;
+pub mod layer_stack;
 
 // SYN event constants
 const SYN_REPORT: i32 = 0;

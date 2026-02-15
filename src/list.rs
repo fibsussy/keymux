@@ -1,8 +1,8 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::config::Config;
-use crate::keyboard_id::{find_all_keyboards, KeyboardId};
+use keymux::config::Config;
+use keymux::keyboard_id::{find_all_keyboards, KeyboardId};
 
 pub fn run_list() -> Result<()> {
     println!();

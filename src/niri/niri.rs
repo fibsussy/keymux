@@ -182,6 +182,7 @@ pub fn start_niri_monitor(tx: UnboundedSender<NiriEvent>) {
 
 /// Start monitoring niri window focus events (sync version for standalone daemons)
 /// Returns immediately after spawning the monitor thread
+#[allow(dead_code)]
 pub fn start_niri_monitor_sync(tx: Sender<NiriEvent>) {
     // Detect socket before spawning thread
     let socket_path = if let Some(path) = detect_niri_socket() {

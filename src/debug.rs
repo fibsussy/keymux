@@ -1,12 +1,12 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::config::Config;
-use crate::daemon_display::DaemonDisplay;
-use crate::display::{
+use keymux::config::Config;
+use keymux::daemon::DaemonDisplay;
+use keymux::ui::display::{
     ConfigDisplay, DeviceDisplay, KeyboardDisplay, PermissionsDisplay, SessionDisplay,
 };
-use crate::window::{get_all_windows, GameModeState};
+use keymux::ui::window::{get_all_windows, GameModeState};
 
 pub fn run_debug() -> Result<()> {
     println!();
@@ -17,7 +17,7 @@ pub fn run_debug() -> Result<()> {
     println!("  PID: {}", std::process::id().to_string().bright_white());
     println!("  Thread ID: {:?}", std::thread::current().id());
 
-    let (actual_uid, is_sudo) = crate::get_actual_user_uid();
+    let (actual_uid, is_sudo) = keymux::get_actual_user_uid();
 
     if is_sudo {
         println!(
@@ -64,7 +64,7 @@ pub fn run_debug() -> Result<()> {
 
     match get_all_windows() {
         Ok(windows) => {
-            let terminal_width = crate::window::get_terminal_width();
+            let terminal_width = keymux::ui::window::get_terminal_width();
 
             println!(
                 "  Total Windows: {}",
