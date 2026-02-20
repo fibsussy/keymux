@@ -118,6 +118,14 @@ impl KeyAction {
             _ => None,
         }
     }
+
+    /// Whether this action can emit key events (vs purely logical like layers/commands)
+    pub const fn is_key_emitter(&self) -> bool {
+        matches!(
+            self,
+            Self::Key(_) | Self::MT(_, _) | Self::DT(_, _) | Self::OSM(_) | Self::SOCD(_, _)
+        )
+    }
 }
 
 /// Game mode detection methods

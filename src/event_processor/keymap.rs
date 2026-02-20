@@ -1,7 +1,7 @@
 use super::adaptive::AdaptiveProcessor;
 use crate::config::{Config, KeyAction};
 use crate::event_processor::actions::{
-    handle_action_release, HandleContext, HeldAction, ProcessResult,
+    handle_action_release, EmitResult, HandleContext, HeldAction, ProcessResult, TdResolution,
 };
 use crate::event_processor::layer_stack::LayerStack;
 use crate::keycode::KeyCode;
@@ -77,16 +77,22 @@ impl KeymapProcessor {
 
         let dt_timeout_events = self.dt_processor.handle_check_timeouts();
 
+        // Notify DT of other key press for permissive hold
+        let dt_permissive_events = self.dt_processor.on_other_key_press(keycode);
+
         let action = self.lookup_action(keycode).cloned();
 
         let (result, key_action) = match action {
+            Some(KeyAction::DT(tap_action, double_tap_action)) => {
+                self.handle_dt_press(keycode, &tap_action, &double_tap_action)
+            }
             Some(action) => {
-                let ctx = self.make_context();
-                action.handle(keycode, ctx)
+                let mut ctx = self.make_context();
+                action.emit(keycode, &mut ctx)
             }
             None => {
-                let ctx = self.make_context();
-                KeyAction::Key(keycode).handle(keycode, ctx)
+                let mut ctx = self.make_context();
+                KeyAction::Key(keycode).emit(keycode, &mut ctx)
             }
         };
 
@@ -94,7 +100,58 @@ impl KeymapProcessor {
             self.held_keys.insert(keycode, vec![ka]);
         }
 
-        self.combine_with_timeouts(dt_timeout_events, result)
+        // Combine timeout events and permissive hold events
+        let mut all_dt_events = dt_timeout_events;
+        all_dt_events.extend(dt_permissive_events);
+
+        self.combine_with_timeouts(all_dt_events, result.to_process_result())
+    }
+
+    fn handle_dt_press(
+        &mut self,
+        keycode: KeyCode,
+        tap_action: &KeyAction,
+        double_tap_action: &KeyAction,
+    ) -> (EmitResult, Option<HeldAction>) {
+        let resolution =
+            self.dt_processor
+                .resolve_action(keycode, tap_action, double_tap_action, false);
+
+        match resolution {
+            TdResolution::EmitAction(action) => {
+                let mut ctx = self.make_context();
+                let (emit_result, held) = action.emit(keycode, &mut ctx);
+                (emit_result, held)
+            }
+            TdResolution::HoldFirst => {
+                let mut ctx = self.make_context();
+                let (emit_result, held) = tap_action.emit(keycode, &mut ctx);
+                (emit_result, held)
+            }
+            _ => (
+                EmitResult::None,
+                Some(HeldAction::DtManaged {
+                    tap_action: (*tap_action).clone(),
+                    double_tap_action: (*double_tap_action).clone(),
+                }),
+            ),
+        }
+    }
+
+    fn handle_dt_release(
+        &mut self,
+        keycode: KeyCode,
+        _tap_action: &KeyAction,
+        _double_tap_action: &KeyAction,
+    ) -> ProcessResult {
+        if let Some(last_emitted) = self.dt_processor.get_last_emitted_action(keycode) {
+            let mut ctx = self.make_context();
+            let emit_result =
+                last_emitted.unemit(HeldAction::RegularKey(keycode), keycode, &mut ctx);
+            return emit_result.to_process_result();
+        }
+
+        ProcessResult::None
     }
 
     fn process_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
@@ -107,15 +164,8 @@ impl KeymapProcessor {
             let mut events = Vec::new();
 
             for action in actions {
-                let result = handle_action_release(
-                    action,
-                    keycode,
-                    &mut self.mt_processor,
-                    &mut self.dt_processor,
-                    &mut self.osm_processor,
-                    &mut self.socd_processor,
-                    &mut self.layer_stack,
-                );
+                let ctx = self.make_context();
+                let result = handle_action_release(action, keycode, ctx);
 
                 match result {
                     ProcessResult::EmitKey(key, pressed) => events.push((key, pressed)),

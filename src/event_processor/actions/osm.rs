@@ -11,11 +11,10 @@
 /// - Can stack multiple one-shots
 /// - Timeout prevents accidental stuck modifiers
 use crate::config::{Config, KeyAction};
+use crate::event_processor::actions::{EmitResult, HeldAction, ProcessResult};
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
-
-use super::handlers::ProcessResult;
 
 /// State of a one-shot modifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,5 +270,37 @@ pub fn handle_osm_release(osm_processor: &mut OsmProcessor, _keycode: KeyCode) -
         OsmResolution::ActivateModifier(mod_key) => ProcessResult::EmitKey(mod_key, true),
         OsmResolution::ReleaseModifier(mod_key) => ProcessResult::EmitKey(mod_key, false),
         OsmResolution::None => ProcessResult::None,
+    }
+}
+
+pub fn emit_osm(
+    action: &KeyAction,
+    _keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> (EmitResult, Option<HeldAction>) {
+    match action {
+        KeyAction::OSM(modifier_action) => {
+            let mod_key = modifier_action.as_keycode();
+            if let Some(key) = mod_key {
+                let _ = handle_osm_action(ctx.osm_processor, key, modifier_action);
+            }
+            (EmitResult::None, Some(HeldAction::OsmManaged))
+        }
+        _ => (EmitResult::None, None),
+    }
+}
+
+pub fn unemit_osm(
+    action: &KeyAction,
+    held_action: HeldAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> EmitResult {
+    match (action, held_action) {
+        (KeyAction::OSM(_), HeldAction::OsmManaged) => {
+            let _ = handle_osm_release(ctx.osm_processor, keycode);
+            EmitResult::None
+        }
+        _ => EmitResult::None,
     }
 }

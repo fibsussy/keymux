@@ -1,321 +1,309 @@
-/// Double-Tap (DT) processor - QMK-inspired tap dance with proper hold support
+/// Double-Tap (DT) / Tap Dance processor - QMK-inspired with proper hold support
 ///
-/// Timing Model:
-/// - tapping_term_ms: How long to hold before first action activates as hold
-/// - double_tap_window_ms: Total window from first press to detect double-tap
+/// This implements the user's requested behavior:
+/// - tap -> tap the first one
+/// - tap then tap -> tap the second one
+/// - hold -> hold the first one
+/// - tap then hold -> hold the second one  
+/// - tap then tap then tap -> would tap the second one after the second tap,
+///   then every tap after will keep tapping the second one until grace period resets
 ///
-/// State Machine:
-/// 1. Unpressed → Press → Pending (start timer from FIRST PRESS)
-/// 2. From Pending:
-///    - Hold > tapping_term → Holding (emit/hold first action)
-///    - Release before tapping_term → Tapped (wait for second tap)
-/// 3. From Tapped:
-///    - Second press within double_tap_window (from FIRST PRESS!) → DoubleTapping
-///    - Timeout expires (double_tap_window from FIRST PRESS) → emit single-tap
-/// 4. From DoubleTapping:
-///    - If held → continue holding second action
-///    - If released → release second action
-/// 5. From Holding:
-///    - On release → release first action
-///
-/// Key behaviors:
-/// - ALL timing is measured from the FIRST PRESS (not from release!)
-/// - Single-tap emits when double_tap_window expires (even if no other key pressed)
-/// - Hold activates at tapping_term (typically < double_tap_window)
-/// - Double-tap must complete within double_tap_window from first press
+/// The key insight is that DT now works with ANY KeyAction, not just Key.
+/// When the action fires, it recursively calls .emit() on the inner action.
 use crate::config::{Config, KeyAction};
+use crate::event_processor::actions::{EmitResult, HeldAction, ProcessResult};
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
 use std::time::Instant;
 
-use super::handlers::ProcessResult;
-
-/// State of a double-tap key
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DtState {
-    /// First press, determining if tap or hold
-    Pending,
-    /// Held beyond tapping_term, emitting first action as hold
-    Holding,
-    /// Released quickly, waiting for potential second tap
+pub enum TdState {
+    Undecided,
+    HoldingFirst,
     Tapped,
-    /// Second press detected, emitting second action
-    DoubleTapping,
+    TappingSecond,
+    HoldingSecond,
 }
 
-/// Double-tap key tracking
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct DtKey {
-    /// Physical keycode
+pub struct TdKey {
     pub keycode: KeyCode,
-    /// First action (single-tap/hold)
-    pub first_action_key: KeyCode,
-    /// Second action (double-tap)
-    pub second_action_key: KeyCode,
-    /// When first press occurred
+    pub tap_action: KeyAction,
+    pub double_tap_action: KeyAction,
     pub first_press_at: Instant,
-    /// When first release occurred (if released)
-    pub first_release_at: Option<Instant>,
-    /// Current state
-    pub state: DtState,
-    /// Has the action been emitted yet?
-    pub action_emitted: bool,
+    pub state: TdState,
+    pub tap_count: u32,
+    pub last_emitted_action: Option<KeyAction>,
 }
 
-impl DtKey {
-    pub fn new(keycode: KeyCode, first_key: KeyCode, second_key: KeyCode) -> Self {
+impl TdKey {
+    pub fn new(keycode: KeyCode, tap_action: KeyAction, double_tap_action: KeyAction) -> Self {
         Self {
             keycode,
-            first_action_key: first_key,
-            second_action_key: second_key,
+            tap_action,
+            double_tap_action,
             first_press_at: Instant::now(),
-            first_release_at: None,
-            state: DtState::Pending,
-            action_emitted: false,
+            state: TdState::Undecided,
+            tap_count: 0,
+            last_emitted_action: None,
         }
     }
 
-    /// Time since first press
     pub fn elapsed_since_press(&self) -> u128 {
         self.first_press_at.elapsed().as_millis()
     }
-
-    /// Time since first release (if released)
-    #[allow(dead_code)]
-    pub fn elapsed_since_release(&self) -> Option<u128> {
-        self.first_release_at.map(|t| t.elapsed().as_millis())
-    }
 }
 
-/// Result of DT processing
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DtResolution {
-    /// Start emitting first action as hold (press it)
-    HoldFirst(KeyCode),
-    /// Release held first action
-    ReleaseFirst(KeyCode),
-    /// Emit first action as tap (press+release)
-    TapFirst(KeyCode),
-    /// Start emitting second action (press it) - for double-tap
-    PressSecond(KeyCode),
-    /// Release second action
-    ReleaseSecond(KeyCode),
-    /// Still undecided
+pub enum TdResolution {
+    EmitAction(KeyAction),
+    HoldFirst,
+    ReleaseFirst,
+    HoldSecond,
+    ReleaseSecond,
     Undecided,
 }
 
-/// Double-Tap processor configuration
-#[derive(Debug, Clone)]
-pub struct DtConfig {
-    /// Tapping term - hold longer than this = hold first action (ms)
+pub struct TdConfig {
     pub tapping_term_ms: u32,
-    /// Double-tap window - time to wait for second tap after first release (ms)
     pub double_tap_window_ms: u64,
+    pub grace_period_ms: u64,
+    pub permissive_hold: bool,
 }
 
-impl Default for DtConfig {
+impl Default for TdConfig {
     fn default() -> Self {
         Self {
-            tapping_term_ms: 200,      // Standard tapping term
-            double_tap_window_ms: 250, // Window for second tap
+            tapping_term_ms: 200,
+            double_tap_window_ms: 250,
+            grace_period_ms: 500,
+            permissive_hold: true,
         }
     }
 }
 
-/// Double-Tap processor - manages all DT keys
 pub struct DtProcessor {
-    /// Config
-    config: DtConfig,
-
-    /// Currently tracked DT keys
-    tracked_keys: HashMap<KeyCode, DtKey>,
+    config: TdConfig,
+    tracked_keys: HashMap<KeyCode, TdKey>,
 }
 
 impl DtProcessor {
-    /// Create new DT processor
     pub fn new(config: &Config) -> Self {
         Self {
-            config: DtConfig {
+            config: TdConfig {
                 tapping_term_ms: config.tapping_term_ms,
                 double_tap_window_ms: config.double_tap_window_ms.unwrap_or(250),
+                grace_period_ms: 500,
+                permissive_hold: true,
             },
             tracked_keys: HashMap::new(),
         }
     }
 
-    /// Handle key press
-    pub fn on_press(
-        &mut self,
-        keycode: KeyCode,
-        first_key: KeyCode,
-        second_key: KeyCode,
-    ) -> DtResolution {
-        if let Some(dt_key) = self.tracked_keys.get_mut(&keycode) {
-            // Already tracking this key - check if it's a second tap
-            if dt_key.state == DtState::Tapped {
-                // Check if within double-tap window FROM FIRST PRESS (not release!)
-                // This matches QMK behavior - the entire double-tap sequence
-                // must happen within the double_tap_window_ms
-                if dt_key.elapsed_since_press() <= self.config.double_tap_window_ms as u128 {
-                    // Double-tap detected! Emit second action
-                    dt_key.state = DtState::DoubleTapping;
-                    dt_key.action_emitted = true;
-                    return DtResolution::PressSecond(dt_key.second_action_key);
-                }
-            }
-
-            // If not a valid double-tap, remove old tracking and start fresh
-            self.tracked_keys.remove(&keycode);
-        }
-
-        // First press - start tracking
-        let dt_key = DtKey::new(keycode, first_key, second_key);
-        self.tracked_keys.insert(keycode, dt_key);
-
-        DtResolution::Undecided
+    /// Called when another key is pressed - handles permissive hold
+    pub fn on_other_key_press(&mut self, _other_keycode: KeyCode) -> Vec<(KeyCode, bool)> {
+        // The actual permissive hold is now handled in resolve_action
+        // This is kept for API compatibility
+        vec![]
     }
 
-    /// Handle key release
-    pub fn on_release(&mut self, keycode: KeyCode) -> DtResolution {
-        if let Some(dt_key) = self.tracked_keys.get_mut(&keycode) {
-            match dt_key.state {
-                DtState::Pending => {
-                    // Released quickly - transition to Tapped state
-                    dt_key.state = DtState::Tapped;
-                    dt_key.first_release_at = Some(Instant::now());
-                    DtResolution::Undecided
+    pub fn emit_action(
+        &mut self,
+        keycode: KeyCode,
+        tap_action: &KeyAction,
+        double_tap_action: &KeyAction,
+    ) -> Vec<(KeyCode, bool)> {
+        let resolution = self.resolve_action(keycode, tap_action, double_tap_action, false);
+
+        match resolution {
+            TdResolution::EmitAction(action) => {
+                let events = Vec::new();
+                if let Some(td_key) = self.tracked_keys.get_mut(&keycode) {
+                    td_key.last_emitted_action = Some(action);
                 }
-                DtState::Holding => {
-                    // Was holding first action - release it
-                    let key = dt_key.first_action_key;
+                events
+            }
+            _ => vec![],
+        }
+    }
+
+    /// Check if any keys other than the given keycode are tracked
+    pub fn has_other_keys_tracked(&self, keycode: KeyCode) -> bool {
+        self.tracked_keys.keys().any(|&k| k != keycode)
+    }
+
+    /// Check if a key is already in a holding state
+    pub fn is_holding(&self, keycode: KeyCode) -> bool {
+        if let Some(td_key) = self.tracked_keys.get(&keycode) {
+            matches!(td_key.state, TdState::HoldingFirst | TdState::HoldingSecond)
+        } else {
+            false
+        }
+    }
+
+    pub fn resolve_action(
+        &mut self,
+        keycode: KeyCode,
+        tap_action: &KeyAction,
+        double_tap_action: &KeyAction,
+        other_key_pressed: bool,
+    ) -> TdResolution {
+        if let Some(td_key) = self.tracked_keys.get_mut(&keycode) {
+            match td_key.state {
+                TdState::Undecided => {
+                    let elapsed = td_key.elapsed_since_press();
+                    // Permissive hold: if another key was pressed, resolve immediately as hold
+                    if other_key_pressed || elapsed > self.config.tapping_term_ms as u128 {
+                        td_key.state = TdState::HoldingFirst;
+                        td_key.last_emitted_action = Some(td_key.tap_action.clone());
+                        return TdResolution::EmitAction(td_key.tap_action.clone());
+                    }
+                    td_key.state = TdState::Tapped;
+                    td_key.tap_count = 1;
+                    TdResolution::Undecided
+                }
+                TdState::Tapped => {
+                    let elapsed = td_key.elapsed_since_press();
+                    if elapsed <= self.config.double_tap_window_ms as u128 {
+                        td_key.state = TdState::TappingSecond;
+                        td_key.tap_count = 2;
+                        td_key.last_emitted_action = Some(td_key.double_tap_action.clone());
+                        return TdResolution::EmitAction(td_key.double_tap_action.clone());
+                    }
                     self.tracked_keys.remove(&keycode);
-                    DtResolution::ReleaseFirst(key)
+                    let mut new_td =
+                        TdKey::new(keycode, (*tap_action).clone(), (*double_tap_action).clone());
+                    new_td.state = TdState::Undecided;
+                    self.tracked_keys.insert(keycode, new_td);
+                    TdResolution::Undecided
                 }
-                DtState::DoubleTapping => {
-                    // Was double-tapping - release second action
-                    let key = dt_key.second_action_key;
-                    self.tracked_keys.remove(&keycode);
-                    DtResolution::ReleaseSecond(key)
+                TdState::TappingSecond => {
+                    let elapsed = td_key.elapsed_since_press();
+                    if elapsed <= self.config.grace_period_ms as u128 {
+                        td_key.tap_count += 1;
+                        td_key.last_emitted_action = Some(td_key.double_tap_action.clone());
+                        return TdResolution::EmitAction(td_key.double_tap_action.clone());
+                    }
+                    TdResolution::Undecided
                 }
-                DtState::Tapped => {
-                    // Shouldn't happen (already released), but handle gracefully
-                    DtResolution::Undecided
+                TdState::HoldingFirst => TdResolution::EmitAction(td_key.tap_action.clone()),
+                TdState::HoldingSecond => {
+                    TdResolution::EmitAction(td_key.double_tap_action.clone())
                 }
             }
         } else {
-            DtResolution::Undecided
+            let mut td_key =
+                TdKey::new(keycode, (*tap_action).clone(), (*double_tap_action).clone());
+            let elapsed = td_key.elapsed_since_press();
+            if elapsed > self.config.tapping_term_ms as u128 {
+                td_key.state = TdState::HoldingFirst;
+                td_key.last_emitted_action = Some(td_key.tap_action.clone());
+                self.tracked_keys.insert(keycode, td_key.clone());
+                return TdResolution::EmitAction(td_key.tap_action);
+            }
+            td_key.state = TdState::Tapped;
+            td_key.tap_count = 1;
+            self.tracked_keys.insert(keycode, td_key);
+            TdResolution::Undecided
         }
     }
 
-    /// Check for timeouts and state transitions
-    /// Should be called periodically (e.g., on every key event)
-    pub fn check_timeouts(&mut self) -> Vec<(KeyCode, DtResolution)> {
+    pub fn unemit_action(
+        &mut self,
+        keycode: KeyCode,
+        _tap_action: &KeyAction,
+        _double_tap_action: &KeyAction,
+    ) -> ProcessResult {
+        if let Some(td_key) = self.tracked_keys.get_mut(&keycode) {
+            match td_key.state {
+                TdState::Undecided => {
+                    self.tracked_keys.remove(&keycode);
+                    ProcessResult::None
+                }
+                TdState::HoldingFirst => {
+                    self.tracked_keys.remove(&keycode);
+                    ProcessResult::None
+                }
+                TdState::Tapped => {
+                    let elapsed = td_key.elapsed_since_press();
+                    if elapsed > self.config.double_tap_window_ms as u128 {
+                        self.tracked_keys.remove(&keycode);
+                    }
+                    ProcessResult::None
+                }
+                TdState::TappingSecond => {
+                    let elapsed = td_key.elapsed_since_press();
+                    if elapsed > self.config.double_tap_window_ms as u128 {
+                        self.tracked_keys.remove(&keycode);
+                    }
+                    ProcessResult::None
+                }
+                TdState::HoldingSecond => {
+                    self.tracked_keys.remove(&keycode);
+                    ProcessResult::None
+                }
+            }
+        } else {
+            ProcessResult::None
+        }
+    }
+
+    pub fn get_last_emitted_action(&self, keycode: KeyCode) -> Option<KeyAction> {
+        self.tracked_keys
+            .get(&keycode)
+            .and_then(|td| td.last_emitted_action.clone())
+    }
+
+    pub fn check_timeouts(&mut self) -> Vec<(KeyCode, ProcessResult)> {
         let mut resolutions = Vec::new();
-        let tapping_term = self.config.tapping_term_ms as u128;
-        let double_tap_window = self.config.double_tap_window_ms as u128;
+        let mut to_remove = Vec::new();
 
-        // Collect keys that need state transitions
-        let mut transitions = Vec::new();
-
-        for (keycode, dt_key) in &self.tracked_keys {
-            match dt_key.state {
-                DtState::Pending => {
-                    // Check if held beyond tapping term → transition to Holding
-                    // BUT: only if tapping_term < double_tap_window
-                    // This allows hold to activate while still in double-tap window
-                    if dt_key.elapsed_since_press() > tapping_term {
-                        transitions.push((*keycode, DtState::Holding));
+        for (keycode, td_key) in &mut self.tracked_keys {
+            match td_key.state {
+                TdState::Undecided => {
+                    if td_key.elapsed_since_press() > self.config.tapping_term_ms as u128 {
+                        td_key.state = TdState::HoldingFirst;
                     }
                 }
-                DtState::Tapped => {
-                    // Check if double-tap window expired → emit single-tap
-                    // Use elapsed_since_press() for consistency - the entire interaction
-                    // must complete within double_tap_window_ms
-                    if dt_key.elapsed_since_press() > double_tap_window {
-                        transitions.push((*keycode, DtState::Tapped)); // Mark for cleanup
+                TdState::Tapped | TdState::TappingSecond => {
+                    if td_key.elapsed_since_press() > self.config.double_tap_window_ms as u128 {
+                        if td_key.tap_count >= 2 {
+                            td_key.state = TdState::Tapped;
+                            td_key.tap_count = 1;
+                            resolutions.push((*keycode, ProcessResult::None));
+                        } else {
+                            to_remove.push(*keycode);
+                        }
                     }
                 }
-                _ => {}
+                TdState::HoldingFirst | TdState::HoldingSecond => {}
             }
         }
 
-        // Apply state transitions and generate resolutions
-        for (keycode, new_state) in transitions {
-            if let Some(dt_key) = self.tracked_keys.get_mut(&keycode) {
-                match new_state {
-                    DtState::Holding => {
-                        // Transition to holding first action
-                        dt_key.state = DtState::Holding;
-                        dt_key.action_emitted = true;
-                        resolutions
-                            .push((keycode, DtResolution::HoldFirst(dt_key.first_action_key)));
-                    }
-                    DtState::Tapped => {
-                        // Timeout expired in Tapped state → emit single-tap
-                        let key = dt_key.first_action_key;
-                        self.tracked_keys.remove(&keycode);
-                        resolutions.push((keycode, DtResolution::TapFirst(key)));
-                    }
-                    _ => {}
-                }
-            }
+        for keycode in to_remove {
+            self.tracked_keys.remove(&keycode);
         }
 
         resolutions
     }
 
-    /// Get currently tracked keys (for debugging)
-    #[allow(dead_code)]
-    pub fn tracked_count(&self) -> usize {
-        self.tracked_keys.len()
-    }
-
-    // === Handler methods for keymap.rs ===
-
-    pub fn handle_press(
-        &mut self,
-        keycode: KeyCode,
-        tap_key: KeyCode,
-        dtap_key: KeyCode,
-    ) -> Vec<(KeyCode, bool)> {
-        let resolution = self.on_press(keycode, tap_key, dtap_key);
-        self.resolution_to_events(resolution)
-    }
-
-    pub fn handle_release(&mut self, keycode: KeyCode) -> DtResolution {
-        self.on_release(keycode)
-    }
-
     pub fn handle_check_timeouts(&mut self) -> Vec<(KeyCode, bool)> {
         let timeouts = self.check_timeouts();
-        self.process_timeouts(timeouts)
-    }
-
-    pub fn resolution_to_events(&self, resolution: DtResolution) -> Vec<(KeyCode, bool)> {
-        match resolution {
-            DtResolution::HoldFirst(key) => vec![(key, true)],
-            DtResolution::TapFirst(key) => vec![(key, true), (key, false)],
-            DtResolution::PressSecond(key) => vec![(key, true)],
-            DtResolution::ReleaseFirst(key) => vec![(key, false)],
-            DtResolution::ReleaseSecond(key) => vec![(key, false)],
-            DtResolution::Undecided => Vec::new(),
-        }
-    }
-
-    fn process_timeouts(&self, timeouts: Vec<(KeyCode, DtResolution)>) -> Vec<(KeyCode, bool)> {
         let mut events = Vec::new();
-        for (_keycode, resolution) in timeouts {
-            events.extend(self.resolution_to_events(resolution));
+
+        for (_keycode, result) in timeouts {
+            match result {
+                ProcessResult::EmitKey(kc, pressed) => events.push((kc, pressed)),
+                ProcessResult::MultipleEvents(evts) => events.extend(evts),
+                _ => {}
+            }
         }
+
         events
     }
-}
 
-const fn extract_keycode(action: &KeyAction) -> Option<KeyCode> {
-    match action {
-        KeyAction::Key(kc) => Some(*kc),
-        _ => None,
+    pub fn tracked_count(&self) -> usize {
+        self.tracked_keys.len()
     }
 }
 
@@ -325,22 +313,102 @@ pub fn handle_dt_action(
     tap_action: &KeyAction,
     double_tap_action: &KeyAction,
 ) -> Vec<(KeyCode, bool)> {
-    let tap_key = extract_keycode(tap_action);
-    let dtap_key = extract_keycode(double_tap_action);
+    dt_processor.emit_action(keycode, tap_action, double_tap_action)
+}
 
-    if let (Some(tap_key), Some(dtap_key)) = (tap_key, dtap_key) {
-        dt_processor.handle_press(keycode, tap_key, dtap_key)
-    } else {
-        Vec::new()
+pub fn handle_dt_release(
+    dt_processor: &mut DtProcessor,
+    keycode: KeyCode,
+    tap_action: &KeyAction,
+    double_tap_action: &KeyAction,
+) -> ProcessResult {
+    dt_processor.unemit_action(keycode, tap_action, double_tap_action)
+}
+
+pub fn emit_dt(
+    action: &KeyAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> (EmitResult, Option<HeldAction>) {
+    match action {
+        KeyAction::DT(tap_action, double_tap_action) => {
+            let tap_action_ref: &KeyAction = tap_action;
+            let dtap_action_ref: &KeyAction = double_tap_action;
+
+            // If already in holding state, don't re-emit - just return the held action
+            if ctx.dt_processor.is_holding(keycode) {
+                return (
+                    EmitResult::None,
+                    Some(HeldAction::DtManaged {
+                        tap_action: (*tap_action_ref).clone(),
+                        double_tap_action: (*dtap_action_ref).clone(),
+                    }),
+                );
+            }
+
+            // Check if any other keys are currently tracked (pressed) - for permissive hold
+            let other_key_pressed = ctx.dt_processor.has_other_keys_tracked(keycode);
+
+            let resolution = ctx.dt_processor.resolve_action(
+                keycode,
+                tap_action_ref,
+                dtap_action_ref,
+                other_key_pressed,
+            );
+
+            match resolution {
+                TdResolution::EmitAction(emit_action) => {
+                    let (emit_result, _) = emit_action.emit(keycode, ctx);
+                    (
+                        emit_result,
+                        Some(HeldAction::DtManaged {
+                            tap_action: (*tap_action_ref).clone(),
+                            double_tap_action: (*dtap_action_ref).clone(),
+                        }),
+                    )
+                }
+                TdResolution::HoldFirst => {
+                    let (emit_result, _) = tap_action_ref.emit(keycode, ctx);
+                    (
+                        emit_result,
+                        Some(HeldAction::DtManaged {
+                            tap_action: (*tap_action_ref).clone(),
+                            double_tap_action: (*dtap_action_ref).clone(),
+                        }),
+                    )
+                }
+                _ => (
+                    EmitResult::None,
+                    Some(HeldAction::DtManaged {
+                        tap_action: (*tap_action_ref).clone(),
+                        double_tap_action: (*dtap_action_ref).clone(),
+                    }),
+                ),
+            }
+        }
+        _ => (EmitResult::None, None),
     }
 }
 
-pub fn handle_dt_release(dt_processor: &mut DtProcessor, _keycode: KeyCode) -> ProcessResult {
-    let resolution = dt_processor.handle_release(_keycode);
-    match resolution {
-        DtResolution::ReleaseFirst(key) => ProcessResult::EmitKey(key, false),
-        DtResolution::ReleaseSecond(key) => ProcessResult::EmitKey(key, false),
-        DtResolution::Undecided => ProcessResult::None,
-        _ => ProcessResult::None,
+pub fn unemit_dt(
+    action: &KeyAction,
+    held_action: HeldAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> EmitResult {
+    match (action, held_action) {
+        (KeyAction::DT(tap_action, double_tap_action), HeldAction::DtManaged { .. }) => {
+            let tap_action_ref: &KeyAction = tap_action;
+            let dtap_action_ref: &KeyAction = double_tap_action;
+            let result = ctx
+                .dt_processor
+                .unemit_action(keycode, tap_action_ref, dtap_action_ref);
+            match result {
+                ProcessResult::EmitKey(kc, pressed) => EmitResult::EmitKey(kc, pressed),
+                ProcessResult::MultipleEvents(events) => EmitResult::EmitKeys(events),
+                _ => EmitResult::None,
+            }
+        }
+        _ => EmitResult::None,
     }
 }

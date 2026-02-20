@@ -1,4 +1,5 @@
 use crate::config::{Config, KeyAction};
+use crate::event_processor::actions::{EmitResult, HeldAction};
 use crate::keycode::KeyCode;
 use serde::{Deserialize, Serialize};
 /// Advanced Mod-Tap (MT) system inspired by QMK
@@ -994,5 +995,61 @@ pub fn handle_mt_action(
         mt_processor.handle_press(keycode, tap_key, hold_key)
     } else {
         (Vec::new(), None)
+    }
+}
+
+fn apply_mt_resolution(resolution: MtResolution) -> EmitResult {
+    match resolution.action {
+        MtAction::TapPress(key) => EmitResult::EmitKey(key, true),
+        MtAction::TapPressRelease(key) => EmitResult::TapKey(key),
+        MtAction::HoldPress(key) => EmitResult::EmitKey(key, true),
+        MtAction::HoldPressRelease(key) => EmitResult::EmitKeys(vec![(key, true), (key, false)]),
+        MtAction::ReleaseHold(key) => EmitResult::EmitKey(key, false),
+    }
+}
+
+pub fn emit_mt(
+    action: &KeyAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> (EmitResult, Option<HeldAction>) {
+    match action {
+        KeyAction::MT(tap_action, hold_action) => {
+            let tap_key = tap_action.as_keycode();
+            let hold_key = hold_action.as_keycode();
+            if let (Some(tap_kc), Some(hold_kc)) = (tap_key, hold_key) {
+                let (events, _) = handle_mt_action(
+                    ctx.mt_processor,
+                    keycode,
+                    &KeyAction::Key(tap_kc),
+                    &KeyAction::Key(hold_kc),
+                );
+                if events.is_empty() {
+                    (EmitResult::None, Some(HeldAction::MtManaged))
+                } else {
+                    (EmitResult::EmitKeys(events), Some(HeldAction::MtManaged))
+                }
+            } else {
+                (EmitResult::None, Some(HeldAction::MtManaged))
+            }
+        }
+        _ => (EmitResult::None, None),
+    }
+}
+
+pub fn unemit_mt(
+    action: &KeyAction,
+    held_action: HeldAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> EmitResult {
+    match (action, held_action) {
+        (KeyAction::MT(_, _), HeldAction::MtManaged) => ctx
+            .mt_processor
+            .handle_release(keycode)
+            .map_or(EmitResult::None, |resolution| {
+                apply_mt_resolution(resolution)
+            }),
+        _ => EmitResult::None,
     }
 }

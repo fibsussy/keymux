@@ -1,4 +1,5 @@
 use crate::config::{Config, KeyAction};
+use crate::event_processor::actions::{EmitResult, HeldAction, ProcessResult};
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
 
@@ -192,4 +193,42 @@ pub fn handle_socd_action(
     extract_keycode(this_action).map_or(SocdResolution::None, |this_key| {
         socd_processor.handle_press(this_key)
     })
+}
+
+pub fn emit_socd(
+    action: &KeyAction,
+    _keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> (EmitResult, Option<HeldAction>) {
+    match action {
+        KeyAction::SOCD(this_action, _) => {
+            let this_key = this_action.as_keycode();
+            if let Some(key) = this_key {
+                let result = handle_socd_action(ctx.socd_processor, key, this_action);
+                (result.into(), Some(HeldAction::SocdManaged))
+            } else {
+                (EmitResult::None, Some(HeldAction::SocdManaged))
+            }
+        }
+        _ => (EmitResult::None, None),
+    }
+}
+
+pub fn unemit_socd(
+    action: &KeyAction,
+    held_action: HeldAction,
+    keycode: KeyCode,
+    ctx: &mut super::HandleContext<'_>,
+) -> EmitResult {
+    match (action, held_action) {
+        (KeyAction::SOCD(_, _), HeldAction::SocdManaged) => {
+            let result: ProcessResult = ctx.socd_processor.handle_release(keycode).into();
+            match result {
+                ProcessResult::EmitKey(kc, pressed) => EmitResult::EmitKey(kc, pressed),
+                ProcessResult::MultipleEvents(events) => EmitResult::EmitKeys(events),
+                _ => EmitResult::None,
+            }
+        }
+        _ => EmitResult::None,
+    }
 }
