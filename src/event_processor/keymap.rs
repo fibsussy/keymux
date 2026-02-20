@@ -6,6 +6,7 @@ use crate::event_processor::actions::{
 use crate::event_processor::layer_stack::LayerStack;
 use crate::keycode::KeyCode;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub struct KeymapProcessor {
     held_keys: HashMap<KeyCode, Vec<HeldAction>>,
@@ -15,11 +16,17 @@ pub struct KeymapProcessor {
     osm_processor: crate::event_processor::actions::OsmProcessor,
     socd_processor: crate::event_processor::actions::SocdProcessor,
     adaptive_processor: AdaptiveProcessor,
+    config_dir: PathBuf,
+    user_id: u32,
 }
 
 impl KeymapProcessor {
     #[must_use]
-    pub fn new(config: &Config) -> Self {
+    pub fn new(config: &Config, config_path: PathBuf, user_id: u32) -> Self {
+        let config_dir = config_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
         Self {
             held_keys: HashMap::new(),
             layer_stack: LayerStack::new(config),
@@ -28,6 +35,8 @@ impl KeymapProcessor {
             osm_processor: crate::event_processor::actions::OsmProcessor::new(config),
             socd_processor: crate::event_processor::actions::SocdProcessor::from_config(config),
             adaptive_processor: AdaptiveProcessor::new(),
+            config_dir,
+            user_id,
         }
     }
 
@@ -179,13 +188,15 @@ impl KeymapProcessor {
         }
     }
 
-    const fn make_context(&mut self) -> HandleContext<'_> {
+    fn make_context(&mut self) -> HandleContext<'_> {
         HandleContext {
             mt_processor: &mut self.mt_processor,
             dt_processor: &mut self.dt_processor,
             osm_processor: &mut self.osm_processor,
             socd_processor: &mut self.socd_processor,
             layer_stack: &mut self.layer_stack,
+            config_dir: self.config_dir.clone(),
+            user_id: self.user_id,
         }
     }
 

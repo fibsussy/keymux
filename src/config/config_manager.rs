@@ -13,6 +13,8 @@ use tokio::sync::RwLock;
 pub struct ConfigManager {
     /// Current active configuration
     config: Arc<RwLock<Config>>,
+    /// Path to the config file
+    config_path: PathBuf,
 }
 
 impl ConfigManager {
@@ -23,11 +25,17 @@ impl ConfigManager {
 
         Ok(Self {
             config: Arc::new(RwLock::new(config)),
+            config_path,
         })
     }
 
     /// Get the current configuration
     pub async fn get_config(&self) -> Config {
         self.config.read().await.clone()
+    }
+
+    /// Get the config file path
+    pub fn get_config_path(&self) -> PathBuf {
+        self.config_path.clone()
     }
 }

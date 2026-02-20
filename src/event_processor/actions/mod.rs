@@ -95,6 +95,8 @@ pub struct HandleContext<'a> {
     pub osm_processor: &'a mut OsmProcessor,
     pub socd_processor: &'a mut SocdProcessor,
     pub layer_stack: &'a mut LayerStack,
+    pub config_dir: std::path::PathBuf,
+    pub user_id: u32,
 }
 
 pub fn handle_action_release(

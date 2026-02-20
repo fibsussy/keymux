@@ -8,6 +8,7 @@ use evdev::uinput::{VirtualDevice, VirtualDeviceBuilder};
 use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
 pub use keymap::KeymapProcessor;
 use std::os::unix::io::AsRawFd;
+use std::path::PathBuf;
 use std::thread;
 use tracing::{debug, error, info, warn};
 
@@ -31,6 +32,7 @@ pub fn start_event_processor(
     mut device: Device,
     keyboard_name: String,
     config: Config,
+    config_path: PathBuf,
     user_id: u32,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     game_mode_rx: std::sync::mpsc::Receiver<bool>,
@@ -42,6 +44,7 @@ pub fn start_event_processor(
             &mut device,
             &keyboard_name,
             &config,
+            config_path,
             user_id,
             shutdown_rx,
             game_mode_rx,
@@ -61,6 +64,7 @@ fn run_event_processor(
     device: &mut Device,
     keyboard_name: &str,
     config: &Config,
+    config_path: PathBuf,
     user_id: u32,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     game_mode_rx: std::sync::mpsc::Receiver<bool>,
@@ -92,7 +96,7 @@ fn run_event_processor(
     info!("Released all keys on startup for safety: {}", keyboard_name);
 
     // Create keymap processor (QMK-inspired)
-    let mut keymap = KeymapProcessor::new(config);
+    let mut keymap = KeymapProcessor::new(config, config_path, user_id);
 
     // Load adaptive timing stats from disk
     let _ = keymap.load_adaptive_stats(user_id); // Ignore errors if file doesn't exist

@@ -512,6 +512,13 @@ impl AsyncDaemon {
             .get_config()
             .await;
 
+        // Get config path for command execution
+        let config_path = self
+            .user_configs
+            .get(&uid)
+            .context("User config not loaded")?
+            .get_config_path();
+
         // Apply per-keyboard config overrides
         let config = base_config.for_keyboard(&kbd_id.to_string());
 
@@ -544,6 +551,7 @@ impl AsyncDaemon {
             let kbd_name_clone = kbd_name.to_string();
             let event_path_display = event_path.display().to_string();
             let config_clone = config.clone();
+            let config_path_clone = config_path.clone();
 
             let handle = thread::spawn(move || {
                 info!(
@@ -555,6 +563,7 @@ impl AsyncDaemon {
                     device,
                     kbd_name_clone.clone(),
                     config_clone,
+                    config_path_clone,
                     uid,
                     shutdown_rx,
                     game_mode_rx,
