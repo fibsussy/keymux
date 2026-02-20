@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-bin
-pkgver=1.0.9
+pkgver=1.0.10
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (binary release)"
 arch=('x86_64' 'aarch64')
@@ -15,8 +15,8 @@ install=keymux.install
 
 source_x86_64=("$url/releases/download/v$pkgver/keymux-$pkgver-x86_64.tar.gz")
 source_aarch64=("$url/releases/download/v$pkgver/keymux-$pkgver-aarch64.tar.gz")
-sha256sums_x86_64=('3657802ad810e03ef1c997bcdfc99657daa79ca5cad6db65290b49c307300d1d')
-sha256sums_aarch64=('852030d5858698aea676034d010ee69278a42413f6caadcb420c53284def9371')
+sha256sums_x86_64=('c929c0ee8e598a585260e7821816165c70db69a4cfd922bbdac34c8cf7271b80')
+sha256sums_aarch64=('380352c8225969304d58851c05d6619d1592576a401a999eab50713f3e087ad3')
 
 package() {
     cd "$srcdir"
