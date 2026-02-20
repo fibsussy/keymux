@@ -181,8 +181,11 @@ git_build() {
     
     cd keymux
     
-    # Build and install using PKGBUILD-git
-    if [ -f PKGBUILD-git ]; then
+    # Use local PKGBUILD-git if available, otherwise use cloned one
+    if [ -f "$START_DIR/PKGBUILD-git" ]; then
+        echo "Using local PKGBUILD-git..."
+        cp "$START_DIR/PKGBUILD-git" PKGBUILD
+    elif [ -f PKGBUILD-git ]; then
         cp PKGBUILD-git PKGBUILD
     fi
     
@@ -198,8 +201,20 @@ bin_install() {
     cd "$temp_dir"
     trap 'rm -rf "$temp_dir"' EXIT
     
-    # Download PKGBUILD-bin
-    if [ -n "$VERSION" ]; then
+    # Use local PKGBUILD-bin if available, otherwise download
+    if [ -f "$START_DIR/PKGBUILD-bin" ]; then
+        echo "Using local PKGBUILD-bin..."
+        cp "$START_DIR/PKGBUILD-bin" PKGBUILD
+        
+        if [ -n "$VERSION" ]; then
+            echo "Installing version $VERSION..."
+            sed -i "s/pkgver=.*/pkgver=${VERSION#v}/" PKGBUILD
+        fi
+        
+        if [ -f "$START_DIR/keymux.install" ]; then
+            cp "$START_DIR/keymux.install" .
+        fi
+    elif [ -n "$VERSION" ]; then
         echo "Downloading PKGBUILD for version $VERSION..."
         curl -fsSL -o PKGBUILD "https://raw.githubusercontent.com/fibsussy/keymux/main/PKGBUILD-bin"
         sed -i "s/pkgver=.*/pkgver=${VERSION#v}/" PKGBUILD
