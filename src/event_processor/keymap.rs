@@ -138,22 +138,6 @@ impl KeymapProcessor {
         }
     }
 
-    fn handle_dt_release(
-        &mut self,
-        keycode: KeyCode,
-        _tap_action: &KeyAction,
-        _double_tap_action: &KeyAction,
-    ) -> ProcessResult {
-        if let Some(last_emitted) = self.dt_processor.get_last_emitted_action(keycode) {
-            let mut ctx = self.make_context();
-            let emit_result =
-                last_emitted.unemit(HeldAction::RegularKey(keycode), keycode, &mut ctx);
-            return emit_result.to_process_result();
-        }
-
-        ProcessResult::None
-    }
-
     fn process_key_release(&mut self, keycode: KeyCode) -> ProcessResult {
         self.adaptive_processor
             .record_key_release(keycode, self.layer_stack.is_game_mode_active());

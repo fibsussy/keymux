@@ -25,7 +25,6 @@ pub enum ProcessResult {
     TapKeyPressRelease(KeyCode),
     MultipleEvents(Vec<(KeyCode, bool)>),
     TypeString(String, bool),
-    RunCommand(String),
     None,
 }
 
@@ -45,7 +44,6 @@ pub enum EmitResult {
     EmitKeys(Vec<(KeyCode, bool)>),
     TapKey(KeyCode),
     LayerAction(Layer),
-    Command(String),
     None,
 }
 
@@ -73,7 +71,6 @@ impl EmitResult {
                 }
             }
             Self::TapKey(kc) => ProcessResult::TapKeyPressRelease(kc),
-            Self::Command(cmd) => ProcessResult::RunCommand(cmd),
             Self::LayerAction(_) | Self::None => ProcessResult::None,
         }
     }
@@ -228,7 +225,7 @@ impl KeyAction {
 }
 
 // Re-export commonly used types and emit/unemit functions
-pub use cmd::{emit_cmd, unemit_cmd, CmdProcessor, CmdResolution};
+pub use cmd::{emit_cmd, unemit_cmd};
 pub use dt::{emit_dt, handle_dt_action, handle_dt_release, unemit_dt, DtProcessor, TdResolution};
 pub use layer::{emit_layer, unemit_layer};
 pub use mt::{

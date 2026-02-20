@@ -2,30 +2,6 @@ use crate::config::KeyAction;
 use crate::event_processor::actions::{EmitResult, HandleContext, HeldAction};
 use crate::keycode::KeyCode;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CmdResolution {
-    Run(String),
-    None,
-}
-
-pub struct CmdProcessor;
-
-impl CmdProcessor {
-    pub const fn new() -> Self {
-        Self
-    }
-
-    pub const fn execute(&self, command: String) -> CmdResolution {
-        CmdResolution::Run(command)
-    }
-}
-
-impl Default for CmdProcessor {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 pub fn emit_cmd(
     action: &KeyAction,
     _keycode: KeyCode,
@@ -33,12 +9,17 @@ pub fn emit_cmd(
 ) -> (EmitResult, Option<HeldAction>) {
     match action {
         KeyAction::CMD(command) => {
-            let cmd_processor = CmdProcessor::new();
-            let result = cmd_processor.execute(command.clone());
-            match result {
-                CmdResolution::Run(cmd) => (EmitResult::Command(cmd), None),
-                CmdResolution::None => (EmitResult::None, None),
-            }
+            let cmd = command.clone();
+            std::thread::spawn(move || {
+                let _ = std::process::Command::new("/bin/sh")
+                    .arg("-c")
+                    .arg(&cmd)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
+            });
+            (EmitResult::None, None)
         }
         _ => (EmitResult::None, None),
     }

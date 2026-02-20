@@ -101,7 +101,7 @@ impl DtProcessor {
     }
 
     /// Called when another key is pressed - handles permissive hold
-    pub fn on_other_key_press(&mut self, _other_keycode: KeyCode) -> Vec<(KeyCode, bool)> {
+    pub const fn on_other_key_press(&mut self, _other_keycode: KeyCode) -> Vec<(KeyCode, bool)> {
         // The actual permissive hold is now handled in resolve_action
         // This is kept for API compatibility
         vec![]
@@ -134,11 +134,9 @@ impl DtProcessor {
 
     /// Check if a key is already in a holding state
     pub fn is_holding(&self, keycode: KeyCode) -> bool {
-        if let Some(td_key) = self.tracked_keys.get(&keycode) {
+        self.tracked_keys.get(&keycode).is_some_and(|td_key| {
             matches!(td_key.state, TdState::HoldingFirst | TdState::HoldingSecond)
-        } else {
-            false
-        }
+        })
     }
 
     pub fn resolve_action(

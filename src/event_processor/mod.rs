@@ -228,38 +228,6 @@ fn run_event_processor(
                                         std::thread::sleep(std::time::Duration::from_millis(2));
                                     }
                                 }
-                                ProcessResult::RunCommand(command) => {
-                                    // Run shell command in fully detached background process
-                                    // This ensures:
-                                    // 1. Command errors don't crash the middleware
-                                    // 2. Process is detached (daemon can shutdown cleanly)
-                                    // 3. Child processes don't block the event loop
-                                    std::thread::spawn(move || {
-                                        match std::process::Command::new("/bin/sh")
-                                            .arg("-c")
-                                            .arg(&command)
-                                            .stdin(std::process::Stdio::null())
-                                            .stdout(std::process::Stdio::null())
-                                            .stderr(std::process::Stdio::null())
-                                            .spawn()
-                                        {
-                                            Ok(mut child) => {
-                                                // Detach from child - don't wait for it
-                                                // This prevents zombie processes and allows clean shutdown
-                                                std::thread::spawn(move || {
-                                                    let _ = child.wait();
-                                                });
-                                            }
-                                            Err(e) => {
-                                                // Log error but don't crash middleware
-                                                error!(
-                                                    "Failed to execute command '{}': {}",
-                                                    command, e
-                                                );
-                                            }
-                                        }
-                                    });
-                                }
                                 ProcessResult::None => {
                                     // Don't emit anything (consumed by layer switch, etc.)
                                 }
