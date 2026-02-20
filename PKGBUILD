@@ -1,6 +1,6 @@
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-local
-pkgver=1.0.10
+pkgver=1.0.11
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (local build)"
 arch=('x86_64')
