@@ -71,6 +71,10 @@ fi
 local_build() {
     echo "Building local version from $START_DIR"
     
+    local commit=$(git -C "$START_DIR" rev-parse --short HEAD)
+    local date=$(date +%Y%m%d)
+    local version=$(grep '^version = ' "$START_DIR/Cargo.toml" | head -n1 | cut -d'"' -f2)
+    
     # Create temp directory with cleanup trap
     temp_dir=$(mktemp -d -t keymux.XXXXXX)
     cd "$temp_dir"
@@ -96,10 +100,10 @@ local_build() {
     done
     
     # Create PKGBUILD for local build
-    cat > PKGBUILD << 'EOF'
+    cat > PKGBUILD << EOF
 # Maintainer: fibsussy <fibsussy@tuta.io>
 pkgname=keymux-local
-pkgver=1.0.0
+pkgver=${version}+r${commit}.${date}+wip
 pkgrel=1
 pkgdesc="Keyboard middleware for gaming with low-level input interception (local WIP version)"
 arch=('x86_64' 'aarch64')
@@ -114,15 +118,8 @@ options=('!debug')
 source=("keymux.tar.gz")
 sha256sums=('SKIP')
 
-pkgver() {
-    local version=$(grep '^version = ' Cargo.toml | head -n1 | cut -d'"' -f2)
-    local commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    local date=$(date +%Y%m%d)
-    echo "$version+r$commit.$date+wip"
-}
-
 prepare() {
-    cargo fetch --locked --target "$CARCH-unknown-linux-gnu"
+    cargo fetch --locked --target "\$CARCH-unknown-linux-gnu"
 }
 
 build() {
@@ -134,21 +131,21 @@ build() {
 package() {
     local binary_name="keymux"
     
-    install -Dm755 "target/release/$binary_name" "$pkgdir/usr/bin/$binary_name"
-    install -Dm644 "$binary_name.service" "$pkgdir/usr/lib/systemd/system/$binary_name.service"
-    install -Dm644 "$binary_name-niri.service" "$pkgdir/usr/lib/systemd/user/$binary_name-niri.service"
-    install -Dm644 "config.example.ron" "$pkgdir/usr/share/doc/$binary_name/config.example.ron"
-    install -Dm644 README.md "$pkgdir/usr/share/doc/$binary_name/README.md"
+    install -Dm755 "target/release/\$binary_name" "\$pkgdir/usr/bin/\$binary_name"
+    install -Dm644 "\$binary_name.service" "\$pkgdir/usr/lib/systemd/system/\$binary_name.service"
+    install -Dm644 "\$binary_name-niri.service" "\$pkgdir/usr/lib/systemd/user/\$binary_name-niri.service"
+    install -Dm644 "config.example.ron" "\$pkgdir/usr/share/doc/\$binary_name/config.example.ron"
+    install -Dm644 README.md "\$pkgdir/usr/share/doc/\$binary_name/README.md"
     
-    install -dm755 "$pkgdir/usr/share/bash-completion/completions"
-    install -dm755 "$pkgdir/usr/share/zsh/site-functions"
-    install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"
+    install -dm755 "\$pkgdir/usr/share/bash-completion/completions"
+    install -dm755 "\$pkgdir/usr/share/zsh/site-functions"
+    install -dm755 "\$pkgdir/usr/share/fish/vendor_completions.d"
     
-    "target/release/$binary_name" completion bash > "$pkgdir/usr/share/bash-completion/completions/$binary_name"
-    "target/release/$binary_name" completion zsh > "$pkgdir/usr/share/zsh/site-functions/_$binary_name"
-    "target/release/$binary_name" completion fish > "$pkgdir/usr/share/fish/vendor_completions.d/$binary_name.fish"
+    "target/release/\$binary_name" completion bash > "\$pkgdir/usr/share/bash-completion/completions/\$binary_name"
+    "target/release/\$binary_name" completion zsh > "\$pkgdir/usr/share/zsh/site-functions/_\$binary_name"
+    "target/release/\$binary_name" completion fish > "\$pkgdir/usr/share/fish/vendor_completions.d/\$binary_name.fish"
     
-    install -dm755 "$pkgdir/etc/skel/.config/$binary_name"
+    install -dm755 "\$pkgdir/etc/skel/.config/\$binary_name"
 }
 EOF
     
