@@ -5,9 +5,8 @@ on:
     branches: [main]
 
 jobs:
-  # Calculate version bump (don't commit yet)
   version:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
     steps:
@@ -41,8 +40,8 @@ jobs:
       - name: Bump PKGBUILD versions
         run: |
           sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD-bin
-          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" PKGBUILD-git
+          sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" aur/PKGBUILD
+          cd aur && makepkg --printsrcinfo > .SRCINFO
       - name: Upload version files (uncommitted)
         uses: actions/upload-artifact@v4
         with:
@@ -51,17 +50,11 @@ jobs:
             Cargo.toml
             Cargo.lock
             PKGBUILD
-            PKGBUILD-bin
-            PKGBUILD-git
+            aur/
 
-  # Build with bumped version (but not committed yet)
   build:
     needs: [version]
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        os: [linux]
-        arch: [x86_64, aarch64]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
         with:
@@ -70,34 +63,38 @@ jobs:
         with:
           name: version-files
           path: .
-      - name: Install cross
-        run: cargo install cross --locked
-      - name: Clean build artifacts
-        run: cargo clean
-      - name: Build binary with cross
-        run: cross build --release --target ${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu
+      - name: Build binary
+        run: cargo build --release
+      - name: Determine architecture
+        id: arch
+        run: |
+          ARCH=$(uname -m)
+          echo "arch=$ARCH" >> $GITHUB_OUTPUT
+          if [ "$ARCH" = "x86_64" ]; then
+            echo "arch_name=x86_64" >> $GITHUB_OUTPUT
+          elif [ "$ARCH" = "aarch64" ]; then
+            echo "arch_name=aarch64" >> $GITHUB_OUTPUT
+          fi
       - name: Create tarball
         run: |
-          mkdir -p keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}
-          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/
-          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux-niri keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
-          cp keymux.service keymux-niri.service keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
-          cp README.md LICENSE config.example.ron keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}/ 2>/dev/null || true
-          tar -czf keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz -C keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }} .
+          mkdir -p keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}
+          mv target/release/keymux keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}/
+          cp keymux.service keymux-niri.service keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}/ 2>/dev/null || true
+          cp README.md LICENSE config.example.ron keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}/ 2>/dev/null || true
+          tar -czf keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.tar.gz -C keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }} .
       - name: Generate checksum
-        run: sha256sum keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz > keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.sha256
+        run: sha256sum keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.tar.gz > keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.sha256
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}
+          name: keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}
           path: |
-            keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.tar.gz
-            keymux-${{ needs.version.outputs.new_version }}-${{ matrix.arch }}.sha256
+            keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.tar.gz
+            keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.sha256
 
-  # Only after ALL builds succeed, commit version and create release
   commit-and-release:
     needs: [version, build]
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
         with:
@@ -108,39 +105,53 @@ jobs:
           path: artifacts
       - name: Restore version files from successful build
         run: |
+          mkdir -p aur
           cp artifacts/version-files/Cargo.toml .
           cp artifacts/version-files/Cargo.lock .
           cp artifacts/version-files/PKGBUILD .
-          cp artifacts/version-files/PKGBUILD-bin .
-          cp artifacts/version-files/PKGBUILD-git .
-      - name: Update PKGBUILD-bin checksums
-        run: |
-          X86_64_SHA=$(cat artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.sha256 | cut -d' ' -f1)
-          AARCH64_SHA=$(cat artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.sha256 | cut -d' ' -f1)
-          sed -i "s/sha256sums_x86_64=('.*')/sha256sums_x86_64=('$X86_64_SHA')/" PKGBUILD-bin
-          sed -i "s/sha256sums_aarch64=('.*')/sha256sums_aarch64=('$AARCH64_SHA')/" PKGBUILD-bin
+          cp -r artifacts/version-files/aur/* aur/
       - name: Commit version bump and create tag
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          git add Cargo.toml Cargo.lock PKGBUILD PKGBUILD-bin PKGBUILD-git
+          git add Cargo.toml Cargo.lock PKGBUILD aur/
           git commit -m "chore: bump version to v${{ needs.version.outputs.new_version }}" || echo "No changes to commit"
           git tag "v${{ needs.version.outputs.new_version }}" -f
           git push origin main
           git push origin "v${{ needs.version.outputs.new_version }}" -f
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push to AUR
+        run: |
+          mkdir -p ~/.ssh
+          echo "$AUR_SSH_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
+          rm -rf aur
+          git clone ssh://aur@aur.archlinux.org/keymux.git aur
+          cp -r artifacts/version-files/aur/* aur/
+          cd aur
+          makepkg --printsrcinfo > .SRCINFO
+          git config user.name "GitHub Action"
+          git config user.email "action@github.com"
+          git add PKGBUILD .SRCINFO keymux.install
+          git commit -m "Update to v${{ needs.version.outputs.new_version }}" || echo "No changes to commit"
+          git push origin master
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
       - name: Create release with assets
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: v${{ needs.version.outputs.new_version }}
-          name: v${{ needs.version.outputs.new_version }}
-          draft: false
-          prerelease: false
-          files: |
-            artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.tar.gz
-            artifacts/keymux-${{ needs.version.outputs.new_version }}-x86_64/keymux-${{ needs.version.outputs.new_version }}-x86_64.sha256
-            artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.tar.gz
-            artifacts/keymux-${{ needs.version.outputs.new_version }}-aarch64/keymux-${{ needs.version.outputs.new_version }}-aarch64.sha256
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            ARCH_NAME="x86_64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            ARCH_NAME="aarch64"
+          fi
+          gh release delete "v${{ needs.version.outputs.new_version }}" --yes 2>/dev/null || true
+          gh release create "v${{ needs.version.outputs.new_version }}" \
+            --title "v${{ needs.version.outputs.new_version }}" \
+            --notes "Release v${{ needs.version.outputs.new_version }}" \
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-${ARCH_NAME}/keymux-${{ needs.version.outputs.new_version }}-${ARCH_NAME}.tar.gz \
+            artifacts/keymux-${{ needs.version.outputs.new_version }}-${ARCH_NAME}/keymux-${{ needs.version.outputs.new_version }}-${ARCH_NAME}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -5,29 +5,37 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        os: [linux]
-        arch: [x86_64, aarch64]
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
-      - name: Install cross
-        run: cargo install cross --locked
-      - name: Clean build artifacts
-        run: cargo clean
-      - name: Build binary with cross
-        run: cross build --release --target ${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu
+      - name: Build binary
+        run: cargo build --release
       - name: Create tarball
         run: |
-          mv target/${{ matrix.arch }}-unknown-${{ matrix.os }}-gnu/release/keymux keymux
-          tar -czf keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz keymux
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            ARCH_NAME="x86_64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            ARCH_NAME="aarch64"
+          fi
+          mkdir -p keymux-linux-${ARCH_NAME}
+          mv target/release/keymux keymux-linux-${ARCH_NAME}/
+          cp keymux.service keymux-niri.service keymux-linux-${ARCH_NAME}/ 2>/dev/null || true
+          cp README.md LICENSE config.example.ron keymux-linux-${ARCH_NAME}/ 2>/dev/null || true
+          tar -czf keymux-linux-${ARCH_NAME}.tar.gz -C keymux-linux-${ARCH_NAME} .
       - name: Generate checksum
-        run: sha256sum keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz > keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256
+        run: |
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            ARCH_NAME="x86_64"
+          elif [ "$ARCH" = "aarch64" ]; then
+            ARCH_NAME="aarch64"
+          fi
+          sha256sum keymux-linux-${ARCH_NAME}.tar.gz > keymux-linux-${ARCH_NAME}.sha256
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: keymux-${{ matrix.os }}-${{ matrix.arch }}
+          name: keymux-linux
           path: |
-            keymux-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
-            keymux-${{ matrix.os }}-${{ matrix.arch }}.sha256
+            keymux-linux-*.tar.gz
+            keymux-linux-*.sha256
