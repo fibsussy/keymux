@@ -10,7 +10,6 @@ depends=('systemd' 'udev' 'libevdev')
 makedepends=('rust' 'cargo')
 optdepends=('niri: automatic game mode detection in Niri compositor')
 options=('!debug')
-install=$pkgname.install
 
 source=()
 sha256sums=()
