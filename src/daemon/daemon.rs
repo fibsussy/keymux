@@ -306,11 +306,10 @@ impl AsyncDaemon {
                     // Check if keyboard is still enabled in their config
                     if let Some(config_mgr) = self.user_configs.get(&owner_uid) {
                         let config = config_mgr.get_config().await;
-                        let kbd_id_str = kbd_id.to_string();
                         let enabled = config
                             .enabled_keyboards
                             .as_ref()
-                            .map(|list| list.contains(&kbd_id_str))
+                            .map(|list| list.iter().any(|e| kbd_id.matches_config_entry(e)))
                             .unwrap_or(false);
 
                         if enabled {
@@ -340,11 +339,10 @@ impl AsyncDaemon {
                     }
 
                     let config = config_mgr.get_config().await;
-                    let kbd_id_str = kbd_id.to_string();
                     let wants_keyboard = config
                         .enabled_keyboards
                         .as_ref()
-                        .map(|list| list.contains(&kbd_id_str))
+                        .map(|list| list.iter().any(|e| kbd_id.matches_config_entry(e)))
                         .unwrap_or(false);
 
                     if wants_keyboard {

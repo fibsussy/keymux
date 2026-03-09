@@ -465,7 +465,22 @@ impl Config {
     #[must_use]
     #[allow(clippy::option_if_let_else)] // Complex nested logic, keeping for readability
     pub fn for_keyboard(&self, keyboard_id: &str) -> Self {
-        if let Some(override_cfg) = self.per_keyboard_overrides.get(keyboard_id) {
+        // Match per_keyboard_overrides using prefix logic for backwards compatibility:
+        // a key without "@port" matches any port of that hardware ID; "@port" is exact.
+        let our_base = keyboard_id.split('@').next().unwrap_or(keyboard_id);
+        let override_cfg = self.per_keyboard_overrides.iter().find_map(|(key, cfg)| {
+            let matches = if key.contains('@') {
+                key == keyboard_id
+            } else {
+                key.as_str() == our_base
+            };
+            if matches {
+                Some(cfg)
+            } else {
+                None
+            }
+        });
+        if let Some(override_cfg) = override_cfg {
             if self.per_keyboard_inherits_global_layout {
                 // INHERITING MODE: Start with global config, merge/override with per-keyboard settings
                 let mut config = self.clone();
