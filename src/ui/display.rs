@@ -66,7 +66,7 @@ impl KeyboardDisplay {
 
     fn print_table_format(&self) {
         let mut max_name_width = 4;
-        let mut max_id_width = 3;
+        let mut max_id_width = 11; // "Hardware ID"
 
         for (id, logical_kb) in &self.logical_keyboards {
             max_name_width = max_name_width.max(logical_kb.name.len());
@@ -93,7 +93,7 @@ impl KeyboardDisplay {
                 logical_kb.name.bright_white(),
                 id.to_string().dimmed(),
                 width_name = max_name_width,
-                width_id = max_id_width
+                width_id = max_id_width,
             );
 
             println!(
@@ -275,12 +275,15 @@ impl DeviceDisplay {
         for event_file in event_files {
             if let Ok(device) = evdev::Device::open(event_file) {
                 if is_keyboard_device(&device) {
+                    let name = device.name().unwrap_or("unknown");
+                    // Skip virtual keyboards created by the daemon
+                    if name.contains("Keyboard Middleware Virtual Keyboard") {
+                        continue;
+                    }
+
                     let display = event_file.display().to_string();
                     println!("    - {}", display.bright_white());
-
-                    if let Some(name) = device.name() {
-                        println!("      Name: {}", name.dimmed());
-                    }
+                    println!("      Name: {}", name.dimmed());
 
                     let input_id = device.input_id();
                     println!(
@@ -361,8 +364,6 @@ impl SessionDisplay {
     }
 
     pub fn print_user_sessions(&self) {
-        println!("{}", "👤 User Sessions:".bright_yellow().bold());
-
         if let Ok(output) = std::process::Command::new("loginctl")
             .args(["list-sessions", "--no-legend"])
             .output()

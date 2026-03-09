@@ -1174,6 +1174,15 @@ impl AsyncDaemon {
                 IpcResponse::Ok
             }
             IpcRequest::ListKeyboards => {
+                // Collect all enabled_keyboards entries from all user configs for annotation
+                let mut all_config_entries: Vec<String> = Vec::new();
+                for config_mgr in self.user_configs.values() {
+                    let config = config_mgr.get_config().await;
+                    if let Some(entries) = &config.enabled_keyboards {
+                        all_config_entries.extend(entries.iter().cloned());
+                    }
+                }
+
                 let keyboards = self
                     .all_keyboards
                     .iter()
@@ -1191,12 +1200,20 @@ impl AsyncDaemon {
                             .iter()
                             .any(|path| self.active_processors.contains_key(path));
 
+                        // Check if any matching config entry is portless (no '@')
+                        // so the display can annotate the full id@port appropriately
+                        let enabled_by_portless = enabled
+                            && all_config_entries
+                                .iter()
+                                .any(|e| id.matches_config_entry(e) && !e.contains('@'));
+
                         crate::ipc::KeyboardInfo {
                             hardware_id: id.to_string(),
                             name: meta.name.clone(),
                             device_path,
                             enabled,
                             connected: meta.connected,
+                            enabled_by_portless,
                         }
                     })
                     .collect();

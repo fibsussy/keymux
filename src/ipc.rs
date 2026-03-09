@@ -45,7 +45,7 @@ pub enum IpcResponse {
 /// Information about a detected keyboard
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyboardInfo {
-    /// Persistent hardware ID (constructed from USB vendor/product or other unique info)
+    /// Persistent hardware ID including USB port (e.g. "362d:0210:0111:0003@3-4.2")
     pub hardware_id: String,
     /// Human-readable name
     pub name: String,
@@ -55,6 +55,10 @@ pub struct KeyboardInfo {
     pub enabled: bool,
     /// Whether this keyboard is currently connected
     pub connected: bool,
+    /// True when enabled via a portless config entry (e.g. "362d:0210:0111:0003")
+    /// rather than an explicit port entry (e.g. "362d:0210:0111:0003@3-4.2").
+    /// Used by the display layer to annotate the ID with a hint.
+    pub enabled_by_portless: bool,
 }
 
 /// Get the IPC socket path for root daemon

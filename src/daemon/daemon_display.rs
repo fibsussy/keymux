@@ -66,22 +66,34 @@ impl DaemonDisplay {
             return 0;
         }
 
-        // Calculate required width
         let mut max_name_width = 4; // "Name"
-        let mut max_hw_id_width = 7; // "HW ID"
+        let mut max_hw_id_width = 5; // "HW ID"
+        let mut max_status_width = 8; // "Status"
 
         for kbd in keyboards {
             max_name_width = max_name_width.max(kbd.name.len());
             max_hw_id_width = max_hw_id_width.max(kbd.hardware_id.len());
+            max_status_width = max_status_width.max(Self::status_str(kbd).len());
         }
 
-        // Columns: Name + HW ID + Status + spacing
-        max_name_width + max_hw_id_width + 6 + 8 + 8 // Status column + margins
+        max_name_width + max_hw_id_width + max_status_width + 8 // spacing
+    }
+
+    fn status_str(kbd: &crate::ipc::KeyboardInfo) -> String {
+        if kbd.enabled {
+            if kbd.enabled_by_portless {
+                "✓ Enabled (no explicit port)".to_string()
+            } else {
+                "✓ Enabled".to_string()
+            }
+        } else {
+            "○ Disabled".to_string()
+        }
     }
 
     fn print_keyboard_table(&self, keyboards: &[crate::ipc::KeyboardInfo]) {
         let mut max_name_width = 4;
-        let mut max_hw_id_width = 7;
+        let mut max_hw_id_width = 5; // "HW ID"
 
         for kbd in keyboards {
             max_name_width = max_name_width.max(kbd.name.len());
@@ -105,7 +117,11 @@ impl DaemonDisplay {
         // Data rows
         for kbd in keyboards {
             let status = if kbd.enabled {
-                "✓ Enabled".bright_green()
+                if kbd.enabled_by_portless {
+                    "✓ Enabled (no explicit port)".bright_green()
+                } else {
+                    "✓ Enabled".bright_green()
+                }
             } else {
                 "○ Disabled".dimmed()
             };
@@ -116,7 +132,7 @@ impl DaemonDisplay {
                 kbd.hardware_id.dimmed(),
                 status,
                 width_name = max_name_width,
-                width_hw = max_hw_id_width
+                width_hw = max_hw_id_width,
             );
         }
     }
@@ -124,7 +140,11 @@ impl DaemonDisplay {
     fn print_keyboard_list_paragraph(&self, keyboards: &[crate::ipc::KeyboardInfo]) {
         for kbd in keyboards {
             let status = if kbd.enabled {
-                "✓ Enabled".bright_green()
+                if kbd.enabled_by_portless {
+                    "✓ Enabled (no explicit port)".bright_green()
+                } else {
+                    "✓ Enabled".bright_green()
+                }
             } else {
                 "○ Disabled".dimmed()
             };
