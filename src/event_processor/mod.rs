@@ -9,7 +9,6 @@ use evdev::{AttributeSet, Device, EventType, InputEvent, Key};
 pub use keymap::KeymapProcessor;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use std::thread;
 use tracing::{debug, error, info, warn};
 
 pub mod actions;
@@ -21,13 +20,13 @@ pub mod layer_stack;
 const SYN_REPORT: i32 = 0;
 const SYN_CODE: u16 = 0;
 
-/// Process events from a physical keyboard and output to virtual device
+/// Run the event processor loop for a single keyboard event file.
 ///
-/// Returns immediately after spawning thread
-/// `shutdown_rx`: Receiver to signal thread shutdown
-/// `game_mode_rx`: Receiver to signal game mode toggle
+/// This is called directly inside the thread spawned by the daemon.
+/// It blocks until the keyboard is unplugged (ENODEV), a shutdown signal
+/// is received, or an unrecoverable error occurs.
 #[allow(clippy::too_many_arguments)]
-pub fn start_event_processor(
+pub fn run_processor(
     keyboard_id: KeyboardId,
     mut device: Device,
     keyboard_name: String,
@@ -37,25 +36,21 @@ pub fn start_event_processor(
     shutdown_rx: crossbeam_channel::Receiver<()>,
     game_mode_rx: std::sync::mpsc::Receiver<bool>,
     save_stats_rx: std::sync::mpsc::Receiver<()>,
-) -> Result<()> {
-    thread::spawn(move || {
-        if let Err(e) = run_event_processor(
-            &keyboard_id,
-            &mut device,
-            &keyboard_name,
-            &config,
-            config_path,
-            user_id,
-            shutdown_rx,
-            game_mode_rx,
-            save_stats_rx,
-        ) {
-            error!("Event processor for {} failed: {}", keyboard_id, e);
-        }
-        info!("Event processor thread exiting for: {}", keyboard_id);
-    });
-
-    Ok(())
+) {
+    if let Err(e) = run_event_processor(
+        &keyboard_id,
+        &mut device,
+        &keyboard_name,
+        &config,
+        config_path,
+        user_id,
+        shutdown_rx,
+        game_mode_rx,
+        save_stats_rx,
+    ) {
+        error!("Event processor for {} failed: {}", keyboard_id, e);
+    }
+    info!("Event processor thread exiting for: {}", keyboard_id);
 }
 
 #[allow(clippy::too_many_arguments)]

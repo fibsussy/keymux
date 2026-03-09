@@ -1,16 +1,10 @@
-#![allow(dead_code)]
-
-/// Session Manager - Multi-user keyboard ownership
-///
-/// Manages keyboard ownership across multiple user sessions, implementing
-/// first-come-first-serve allocation with automatic release on session end.
-use crate::keyboard_id::KeyboardId;
+/// Session Manager - tracks active user sessions for multi-user keyboard ownership.
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 #[derive(Debug, Clone)]
 pub struct UserSession {
@@ -25,10 +19,9 @@ pub enum SessionState {
     Idle,
 }
 
-/// Session Manager for multi-user keyboard ownership
+/// Session Manager — wraps loginctl session state.
+/// Keyboard ownership is tracked by AsyncDaemon directly, not here.
 pub struct SessionManager {
-    /// Map of keyboard ID to owning user UID
-    keyboard_owners: Arc<RwLock<HashMap<KeyboardId, u32>>>,
     /// Map of UID to user session info
     user_sessions: Arc<RwLock<HashMap<u32, UserSession>>>,
 }
@@ -42,12 +35,11 @@ impl Default for SessionManager {
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            keyboard_owners: Arc::new(RwLock::new(HashMap::new())),
             user_sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Update user session information from loginctl
+    /// Refresh user session information from loginctl
     pub async fn refresh_sessions(&self) -> Result<()> {
         let sessions = list_user_sessions()?;
         debug!("Found {} user sessions from loginctl", sessions.len());
@@ -60,46 +52,21 @@ impl SessionManager {
 
         let mut user_sessions = self.user_sessions.write().await;
 
-        // Update existing sessions and add new ones
+        // Upsert all sessions returned by loginctl
         for session in sessions {
             user_sessions.insert(session.uid, session);
         }
 
-        // Remove sessions that are no longer active
-        let active_uids: Vec<u32> = user_sessions
-            .values()
-            .filter(|s| s.state == SessionState::Active)
-            .map(|s| s.uid)
-            .collect();
-
-        user_sessions.retain(|uid, _| active_uids.contains(uid));
+        // Drop sessions that are no longer reported as active by loginctl.
+        // (Idle sessions are re-inserted on every refresh so they'll reappear
+        // as Active once loginctl reports them that way again.)
+        user_sessions.retain(|_, s| s.state == SessionState::Active);
         drop(user_sessions);
-
-        // Release keyboards from inactive sessions
-        let user_sessions = self.user_sessions.read().await;
-        self.keyboard_owners
-            .write()
-            .await
-            .retain(|kbd_id, owner_uid| {
-                let should_retain = user_sessions
-                    .get(owner_uid)
-                    .map(|s| s.state == SessionState::Active)
-                    .unwrap_or(false);
-
-                if !should_retain {
-                    info!(
-                        "Auto-releasing keyboard {} from inactive user {}",
-                        kbd_id, owner_uid
-                    );
-                }
-
-                should_retain
-            });
 
         Ok(())
     }
 
-    /// Check if a user session is active
+    /// Check if a user session is currently active
     pub async fn is_user_active(&self, uid: u32) -> bool {
         let sessions = self.user_sessions.read().await;
         sessions

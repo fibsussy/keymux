@@ -11,7 +11,6 @@ mod debug;
 mod keyboard_id;
 pub mod keycode;
 mod list;
-mod session_manager;
 mod toggle;
 
 pub use keymux::{get_actual_user_uid, get_user_home_dir};

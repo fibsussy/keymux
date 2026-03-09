@@ -51,9 +51,10 @@ pub struct AsyncDaemon {
     keyboard_owners: HashMap<KeyboardId, u32>,
     /// Current game mode state (preserved across thread restarts)
     game_mode_active: bool,
-    /// Last config reload time for debouncing
-    #[allow(dead_code)]
-    last_config_reload: Option<std::time::Instant>,
+    /// Receiver for processor thread death notifications (path of the dead processor)
+    processor_dead_rx: tokio_mpsc::UnboundedReceiver<PathBuf>,
+    /// Sender side kept on the daemon to clone into each new ProcessorHandle
+    processor_dead_tx: tokio_mpsc::UnboundedSender<PathBuf>,
 }
 
 impl AsyncDaemon {
@@ -70,6 +71,7 @@ impl AsyncDaemon {
         }
 
         let session_manager = SessionManager::new();
+        let (processor_dead_tx, processor_dead_rx) = tokio_mpsc::unbounded_channel();
 
         Ok(Self {
             user_configs: HashMap::new(),
@@ -78,7 +80,8 @@ impl AsyncDaemon {
             active_processors: HashMap::new(),
             keyboard_owners: HashMap::new(),
             game_mode_active: false,
-            last_config_reload: None,
+            processor_dead_rx,
+            processor_dead_tx,
         })
     }
 
@@ -109,19 +112,54 @@ impl AsyncDaemon {
 
         // Main event loop - use async recv for zero CPU usage when idle
         let mut session_check = tokio::time::interval(Duration::from_secs(5));
-
-        // Hotplug debouncing: collect events and only process after quiet period
+        // Pending hotplug debounce: armed when we receive an add/remove event, fires after settling
         let mut hotplug_debounce: Option<tokio::time::Instant> = None;
-        let hotplug_debounce_duration = Duration::from_secs(1);
+        const HOTPLUG_DEBOUNCE_MS: u64 = 300;
 
         loop {
+            // Compute how long until the debounce timer fires (if armed)
+            let debounce_deadline = hotplug_debounce.map(|t| {
+                let settle = t + Duration::from_millis(HOTPLUG_DEBOUNCE_MS);
+                let now = tokio::time::Instant::now();
+                if settle > now {
+                    settle - now
+                } else {
+                    Duration::ZERO
+                }
+            });
+
             tokio::select! {
                 Some(event) = hotplug_rx.recv() => {
-                    // Only process "add" and "remove" events to avoid reacting to every input event
+                    // Only react to "add" and "remove" events. We use --udev so events only
+                    // fire after udev rule processing is complete (device node fully ready).
+                    // However, a single physical replug fires many udev events in rapid
+                    // succession — arm a debounce timer so we act once after things settle.
                     if event.contains(" add ") || event.contains(" remove ") {
                         debug!("Hotplug event (add/remove): {}", event);
-                        // Set debounce timer - we'll process this after things quiet down
                         hotplug_debounce = Some(tokio::time::Instant::now());
+                    }
+                }
+                // Debounce timer fired — drain any remaining queued events then resync
+                _ = async {
+                    if let Some(deadline) = debounce_deadline {
+                        tokio::time::sleep(deadline).await;
+                    } else {
+                        // Never fire if no debounce is armed
+                        std::future::pending::<()>().await;
+                    }
+                } => {
+                    // Drain any events that arrived during the debounce window
+                    while let Ok(event) = hotplug_rx.try_recv() {
+                        debug!("Draining queued hotplug event: {}", event);
+                    }
+                    hotplug_debounce = None;
+                    info!("Hotplug settled, resyncing keyboards...");
+                    self.refresh_sessions().await;
+                    self.load_user_configs().await;
+                    if let Err(e) = self.discover_keyboards().await {
+                        error!("Failed to rediscover keyboards: {}", e);
+                    } else {
+                        self.sync_keyboards_to_users().await;
                     }
                 }
                 Some((request, resp_tx)) = ipc_rx.recv() => {
@@ -153,18 +191,22 @@ impl AsyncDaemon {
                 _ = session_check.tick() => {
                     self.refresh_sessions().await;
                     self.sync_keyboards_to_users().await;
-
-                    // Check if hotplug debounce timer expired
-                    if let Some(debounce_time) = hotplug_debounce {
-                        if debounce_time.elapsed() >= hotplug_debounce_duration {
-                            info!("Processing debounced hotplug events...");
-                            self.load_user_configs().await;
-                            if let Err(e) = self.discover_keyboards().await {
-                                error!("Failed to rediscover keyboards: {}", e);
-                            } else {
-                                self.sync_keyboards_to_users().await;
+                }
+                Some(dead_path) = self.processor_dead_rx.recv() => {
+                    // A processor thread died (ENODEV or error) — clean up immediately
+                    // without waiting for a udev event to trigger rediscovery.
+                    if let Some((kbd_id, _, _)) = self.active_processors.remove(&dead_path) {
+                        info!("Processor thread died for: {} ({})", dead_path.display(), kbd_id);
+                        // If this was the last processor for this keyboard, mark it disconnected
+                        let any_remaining = self.active_processors
+                            .values()
+                            .any(|(k, _, _)| k == &kbd_id);
+                        if !any_remaining {
+                            info!("All processors dead for {}, marking disconnected", kbd_id);
+                            if let Some(meta) = self.all_keyboards.get_mut(&kbd_id) {
+                                meta.connected = false;
                             }
-                            hotplug_debounce = None;
+                            self.keyboard_owners.remove(&kbd_id);
                         }
                     }
                 }
@@ -228,12 +270,6 @@ impl AsyncDaemon {
 
     /// Synchronize keyboards to active users based on their configs
     async fn sync_keyboards_to_users(&mut self) {
-        // Get all active user sessions
-        if let Err(e) = self.session_manager.refresh_sessions().await {
-            error!("Failed to refresh sessions: {}", e);
-            return;
-        }
-
         // Load configs for active users (if not already loaded)
         self.load_user_configs().await;
 
@@ -367,12 +403,7 @@ impl AsyncDaemon {
 
     /// Load configs for all active users
     async fn load_user_configs(&mut self) {
-        if let Err(e) = self.session_manager.refresh_sessions().await {
-            error!("Failed to refresh sessions: {}", e);
-            return;
-        }
-
-        // Get active user UIDs
+        // Get active user UIDs (session state already refreshed by caller)
         let active_uids = self.get_active_user_uids().await;
         info!("Active user UIDs: {:?}", active_uids);
 
@@ -529,6 +560,9 @@ impl AsyncDaemon {
             uid
         );
 
+        // Track which paths we successfully started so we can roll back on partial failure
+        let mut started_paths: Vec<PathBuf> = Vec::new();
+
         // Spawn ONE THREAD PER EVENT FILE
         for (idx, event_path) in event_paths.iter().enumerate() {
             // Check if already running
@@ -537,40 +571,60 @@ impl AsyncDaemon {
                 continue;
             }
 
-            // Open device
-            let device = Device::open(event_path)
-                .with_context(|| format!("Failed to open device: {}", event_path.display()))?;
+            // Open device — on failure, roll back any processors already started this call
+            let device = match Device::open(event_path)
+                .with_context(|| format!("Failed to open device: {}", event_path.display()))
+            {
+                Ok(d) => d,
+                Err(e) => {
+                    // Shut down any processors we already started in this call
+                    for path in &started_paths {
+                        if let Some((_, _, mut handle)) = self.active_processors.remove(path) {
+                            let _ = handle.shutdown_tx.send(());
+                            if let Some(th) = handle.thread_handle.take() {
+                                let _ = th.join();
+                            }
+                        }
+                    }
+                    return Err(e);
+                }
+            };
 
             // Create channels
             let (shutdown_tx, shutdown_rx) = crossbeam_channel::bounded(1);
             let (game_mode_tx, game_mode_rx) = mpsc::channel();
             let (save_stats_tx, save_stats_rx) = mpsc::channel();
 
-            // Start event processor thread
+            // Spawn ONE real thread per event file — no wrapper, the JoinHandle
+            // tracks the actual processor loop.  A clone of dead_tx is moved into
+            // the thread; when the thread exits (ENODEV, shutdown, or error) the
+            // send fires and the daemon's select! arm cleans up immediately.
             let kbd_id_clone = kbd_id.clone();
             let kbd_name_clone = kbd_name.to_string();
-            let event_path_display = event_path.display().to_string();
+            let event_path_clone = event_path.clone();
             let config_clone = config.clone();
             let config_path_clone = config_path.clone();
+            let dead_tx = self.processor_dead_tx.clone();
 
             let handle = thread::spawn(move || {
                 info!(
                     "Event processor thread started for {} (event file: {})",
-                    kbd_name_clone, event_path_display
+                    kbd_name_clone,
+                    event_path_clone.display()
                 );
-                if let Err(e) = event_processor::start_event_processor(
+                event_processor::run_processor(
                     kbd_id_clone,
                     device,
-                    kbd_name_clone.clone(),
+                    kbd_name_clone,
                     config_clone,
                     config_path_clone,
                     uid,
                     shutdown_rx,
                     game_mode_rx,
                     save_stats_rx,
-                ) {
-                    error!("Event processor failed for {}: {}", kbd_name_clone, e);
-                }
+                );
+                // Notify daemon that this processor is gone
+                let _ = dead_tx.send(event_path_clone);
             });
 
             // Store processor handle indexed by EVENT PATH
@@ -587,6 +641,9 @@ impl AsyncDaemon {
                     },
                 ),
             );
+
+            // Track this path for rollback purposes
+            started_paths.push(event_path.clone());
 
             // Send current game mode state to the new thread to preserve state across restarts
             let _ = game_mode_tx.send(self.game_mode_active);
@@ -624,20 +681,43 @@ impl AsyncDaemon {
             kbd_id
         );
 
+        // Collect thread handles after sending all shutdown signals, then await them.
+        // This ensures the old processor has fully released its device grab before we
+        // attempt to open and re-grab the device for the new processor on reconnect.
+        let mut join_tasks = Vec::new();
+
         for path in paths_to_stop {
             if let Some((_, _, mut handle)) = self.active_processors.remove(&path) {
                 // Send shutdown signal
                 let _ = handle.shutdown_tx.send(());
 
-                // Wait for thread to finish (with timeout)
                 if let Some(thread_handle) = handle.thread_handle.take() {
-                    // Wait in background to avoid blocking
-                    tokio::task::spawn_blocking(move || {
-                        let _ = thread_handle.join();
-                    });
+                    // Await the thread with a generous timeout so we don't block forever
+                    // on a stuck thread, but DO wait long enough for the ungrab to complete.
+                    let path_str = path.display().to_string();
+                    join_tasks.push((path_str, thread_handle));
+                } else {
+                    info!("Stopped processor for: {}", path.display());
                 }
+            }
+        }
 
-                info!("Stopped processor for: {}", path.display());
+        // Spawn all join tasks concurrently so N threads shut down in parallel
+        // (worst-case time = slowest thread, not sum of all threads).
+        let join_futures: Vec<_> = join_tasks
+            .into_iter()
+            .map(|(path_str, thread_handle)| {
+                tokio::task::spawn_blocking(move || {
+                    let _ = thread_handle.join();
+                    path_str
+                })
+            })
+            .collect();
+
+        for fut in join_futures {
+            match fut.await {
+                Ok(path_str) => info!("Stopped processor for: {}", path_str),
+                Err(e) => warn!("Thread join task panicked: {}", e),
             }
         }
 
@@ -653,6 +733,7 @@ impl AsyncDaemon {
                 // Use udevadm to monitor for input device changes
                 let mut child = Command::new("udevadm")
                     .arg("monitor")
+                    .arg("--udev")
                     .arg("--subsystem-match=input")
                     .stdout(Stdio::piped())
                     .spawn()
@@ -981,43 +1062,10 @@ impl AsyncDaemon {
         rx
     }
 
-    /// Handle config file changes - triggers full reload (same as IPC)
-    #[allow(clippy::future_not_send)]
-    #[allow(dead_code)]
-    async fn check_config_hot_reload(&mut self) {
-        // Check if hot config reload is enabled for ANY user
-        let mut hot_reload_enabled = false;
-        for mgr in self.user_configs.values() {
-            let config = mgr.get_config().await;
-            if config.hot_config_reload {
-                hot_reload_enabled = true;
-                break;
-            }
-        }
-
-        if !hot_reload_enabled {
-            debug!("Config file changed, but hot_config_reload is disabled - ignoring");
-            return;
-        }
-
-        // Additional debouncing: ignore if we reloaded very recently
-        if let Some(last_reload) = self.last_config_reload {
-            if last_reload.elapsed() < Duration::from_millis(500) {
-                debug!("Ignoring config change (too soon after last reload)");
-                return;
-            }
-        }
-
-        info!("Config file changed, triggering hot reload...");
-        self.last_config_reload = Some(std::time::Instant::now());
-        if let Err(e) = self.reload_all_configs().await {
-            error!("Auto-reload failed: {}", e);
-        }
-    }
-
     /// Reload all user configs and restart processors
     async fn reload_all_configs(&mut self) -> Result<()> {
         info!("Reloading all user configs...");
+        self.refresh_sessions().await;
 
         // Step 1: Validate all configs before stopping anything
         info!("Validating configs...");
@@ -1077,12 +1125,13 @@ impl AsyncDaemon {
             ));
         }
 
-        // Step 2: Stop all processors
+        // Step 2: Stop all processors and clear ownership state
         info!("Stopping all processors...");
         let all_kbd_ids: Vec<_> = self.keyboard_owners.keys().cloned().collect();
         for kbd_id in all_kbd_ids {
             let _ = self.stop_processors_for_keyboard(&kbd_id).await;
         }
+        self.keyboard_owners.clear();
 
         // Step 3: Clear and reload configs
         info!("Reloading configs from disk...");
