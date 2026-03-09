@@ -135,7 +135,6 @@ impl KeyboardDisplay {
 
 pub struct ConfigDisplay {
     pub config_path: std::path::PathBuf,
-    #[allow(dead_code)]
     pub terminal_width: usize,
 }
 
@@ -221,7 +220,6 @@ impl ConfigDisplay {
 }
 
 pub struct DeviceDisplay {
-    #[allow(dead_code)]
     pub terminal_width: usize,
 }
 
@@ -300,7 +298,6 @@ impl DeviceDisplay {
 }
 
 pub struct PermissionsDisplay {
-    #[allow(dead_code)]
     pub terminal_width: usize,
 }
 
@@ -346,7 +343,6 @@ impl PermissionsDisplay {
 }
 
 pub struct SessionDisplay {
-    #[allow(dead_code)]
     pub terminal_width: usize,
 }
 

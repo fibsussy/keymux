@@ -27,7 +27,6 @@ impl LayerStack {
         }
     }
 
-    #[allow(dead_code)]
     pub fn current_layer(&self) -> Layer {
         self.layers.last().cloned().unwrap_or_else(Layer::base)
     }
@@ -48,7 +47,6 @@ impl LayerStack {
         }
     }
 
-    #[allow(dead_code)]
     pub fn toggle_layer(&mut self, layer: Layer) {
         if self.layers.contains(&layer) {
             self.deactivate_layer(&layer);

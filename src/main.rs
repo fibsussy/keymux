@@ -8,7 +8,6 @@ mod cli;
 mod gamemode;
 
 mod debug;
-mod keyboard_id;
 pub mod keycode;
 mod list;
 mod toggle;

@@ -25,7 +25,6 @@ pub enum Hand {
 
 /// State of an MT key
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum MtKeyState {
     /// Key is undecided (waiting for tap/hold resolution)
     Undecided,
@@ -43,7 +42,6 @@ pub enum MtKeyState {
 
 /// MT key tracking state
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MtKey {
     /// Physical keycode
     pub keycode: KeyCode,
@@ -382,7 +380,6 @@ impl MtProcessor {
     }
 
     /// Set hand for a keycode (for custom layouts)
-    #[allow(dead_code)]
     pub fn set_hand(&mut self, keycode: KeyCode, hand: Hand) {
         self.hand_map.insert(keycode, hand);
     }
@@ -773,19 +770,16 @@ impl MtProcessor {
     }
 
     /// Check if any keys are pending (for external permissive hold logic)
-    #[allow(dead_code)]
     pub fn has_pending_keys(&self) -> bool {
         !self.undecided_keys.is_empty()
     }
 
     /// Get count of undecided keys
-    #[allow(dead_code)]
     pub fn undecided_count(&self) -> usize {
         self.undecided_keys.len()
     }
 
     /// Get adaptive stats for display/debugging
-    #[allow(dead_code)]
     pub fn get_adaptive_stats(&self) -> Vec<(KeyCode, &RollingStats)> {
         self.rolling_stats
             .iter()
@@ -902,7 +896,6 @@ impl MtProcessor {
 
 /// MT resolution result
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct MtResolution {
     /// The MT keycode that was resolved
     pub keycode: KeyCode,

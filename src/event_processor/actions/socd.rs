@@ -12,16 +12,13 @@ pub enum SocdResolution {
 
 #[derive(Debug, Clone)]
 pub struct SocdGroup {
-    #[allow(dead_code)]
-    all_keys: Vec<KeyCode>,
     held_stack: Vec<KeyCode>,
     active_key: Option<KeyCode>,
 }
 
 impl SocdGroup {
-    pub const fn new(all_keys: Vec<KeyCode>) -> Self {
+    pub fn new(_all_keys: Vec<KeyCode>) -> Self {
         Self {
-            all_keys,
             held_stack: Vec::new(),
             active_key: None,
         }

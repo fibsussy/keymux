@@ -66,7 +66,6 @@ impl KeymapProcessor {
         self.adaptive_processor.load_adaptive_stats(user_id)
     }
 
-    #[allow(dead_code)]
     pub fn get_all_key_stats(
         &self,
     ) -> HashMap<KeyCode, crate::event_processor::actions::RollingStats> {

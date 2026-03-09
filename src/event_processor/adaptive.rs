@@ -86,7 +86,6 @@ impl AdaptiveProcessor {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub fn get_all_key_stats(&self) -> HashMap<KeyCode, RollingStats> {
         self.all_key_stats.clone()
     }

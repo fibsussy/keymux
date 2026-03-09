@@ -18,7 +18,6 @@ use std::time::Instant;
 
 /// State of a one-shot modifier
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub enum OsmState {
     /// Pressed, waiting to see if it's a tap or hold
     Pressed,
@@ -32,7 +31,6 @@ pub enum OsmState {
 
 /// OneShot modifier tracking
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OsmKey {
     /// Physical keycode
     pub keycode: KeyCode,
@@ -166,7 +164,6 @@ impl OsmProcessor {
 
     /// Called when ANY other key is pressed
     /// Returns modifiers that should be released after this key
-    #[allow(dead_code)]
     pub fn on_other_key_press(&mut self, keycode: KeyCode) -> Vec<(KeyCode, OsmResolution)> {
         let mut resolutions = Vec::new();
 
@@ -188,7 +185,6 @@ impl OsmProcessor {
 
     /// Called when ANY other key is released
     /// Returns modifiers that should be released now
-    #[allow(dead_code)]
     pub fn on_other_key_release(&mut self, _keycode: KeyCode) -> Vec<(KeyCode, OsmResolution)> {
         let mut resolutions = Vec::new();
 
@@ -240,7 +236,6 @@ impl OsmProcessor {
         resolutions
     }
 
-    #[allow(dead_code)]
     pub fn active_count(&self) -> usize {
         self.active_oneshots.len()
     }
