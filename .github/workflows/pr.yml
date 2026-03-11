@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Build binary
         run: cargo build --release
       - name: Create tarball
@@ -33,7 +33,7 @@ jobs:
           fi
           sha256sum keymux-linux-${ARCH_NAME}.tar.gz > keymux-linux-${ARCH_NAME}.sha256
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: keymux-linux
           path: |

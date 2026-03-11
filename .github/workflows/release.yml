@@ -10,14 +10,20 @@ jobs:
     outputs:
       new_version: ${{ steps.bump.outputs.new_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions-rs/toolchain@v1
+      - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
       - name: Install cargo-bump
         run: cargo install cargo-bump --locked
+      - name: Install makepkg if missing
+        run: |
+          if ! command -v makepkg &> /dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y base-devel
+          fi
       - name: Calculate version bump
         id: bump
         run: |
@@ -43,7 +49,7 @@ jobs:
           sed -i "s/pkgver=.*/pkgver=${{ steps.bump.outputs.new_version }}/" aur/PKGBUILD
           cd aur && makepkg --printsrcinfo > .SRCINFO
       - name: Upload version files (uncommitted)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: version-files
           path: |
@@ -56,10 +62,10 @@ jobs:
     needs: [version]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: version-files
           path: .
@@ -85,7 +91,7 @@ jobs:
       - name: Generate checksum
         run: sha256sum keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.tar.gz > keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}.sha256
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: keymux-${{ needs.version.outputs.new_version }}-${{ steps.arch.outputs.arch_name }}
           path: |
@@ -96,11 +102,11 @@ jobs:
     needs: [version, build]
     runs-on: self-hosted
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: main
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: artifacts
       - name: Restore version files from successful build
@@ -128,9 +134,18 @@ jobs:
           chmod 600 ~/.ssh/aur
           ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts
           rm -rf aur
-          git clone ssh://aur@aur.archlinux.org/keymux.git aur
-          cp -r artifacts/version-files/aur/* aur/
-          cd aur
+          if git clone ssh://aur@aur.archlinux.org/keymux.git aur 2>&1; then
+            echo "Cloned existing AUR repo"
+            cp -r artifacts/version-files/aur/* aur/
+            cd aur
+          else
+            echo "Creating new AUR repo"
+            mkdir aur
+            cp -r artifacts/version-files/aur/* aur/
+            cd aur
+            git init
+            git remote add origin ssh://aur@aur.archlinux.org/keymux.git
+          fi
           makepkg --printsrcinfo > .SRCINFO
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
