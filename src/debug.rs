@@ -8,7 +8,12 @@ use keymux::ui::display::{
 };
 use keymux::ui::window::{get_all_windows, GameModeState};
 
-pub fn run_debug() -> Result<()> {
+pub fn run_debug(config_path: Option<&std::path::Path>) -> Result<()> {
+    let config_path = if let Some(p) = config_path {
+        p.to_path_buf()
+    } else {
+        Config::default_path()?
+    };
     println!();
     println!("{}", "═════════════════════════════".bright_cyan());
     println!("  {}", "Debug Information".bright_cyan().bold());
@@ -43,7 +48,7 @@ pub fn run_debug() -> Result<()> {
     println!();
 
     // Config info
-    ConfigDisplay::new(Config::default_path()?).print_config_info();
+    ConfigDisplay::new(config_path.clone()).print_config_info();
 
     // Device watching info
     DeviceDisplay::new().print_device_watching();

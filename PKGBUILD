@@ -27,11 +27,21 @@ package() {
     install -Dm644 "config.example.ron" "$pkgdir/usr/share/doc/keymux/config.example.ron"
     install -Dm644 "README.md" "$pkgdir/usr/share/doc/keymux/README.md"
     install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/keymux/LICENSE"
-    install -dm755 "$pkgdir/usr/share/bash-completion/completions"
-    install -dm755 "$pkgdir/usr/share/zsh/site-functions"
+    
+    # Static shell completions generated at build time
+    local _keymux="$startdir/target/release/keymux"
+    
+    # Fish
     install -dm755 "$pkgdir/usr/share/fish/vendor_completions.d"
-    "$pkgdir/usr/bin/keymux" completion bash > "$pkgdir/usr/share/bash-completion/completions/keymux"
-    "$pkgdir/usr/bin/keymux" completion zsh > "$pkgdir/usr/share/zsh/site-functions/_keymux"
-    "$pkgdir/usr/bin/keymux" completion fish > "$pkgdir/usr/share/fish/vendor_completions.d/keymux.fish"
+    "$_keymux" completion fish > "$pkgdir/usr/share/fish/vendor_completions.d/keymux.fish"
+    
+    # Bash
+    install -dm755 "$pkgdir/usr/share/bash-completion/completions"
+    "$_keymux" completion bash > "$pkgdir/usr/share/bash-completion/completions/keymux"
+    
+    # Zsh
+    install -dm755 "$pkgdir/usr/share/zsh/site-functions"
+    "$_keymux" completion zsh > "$pkgdir/usr/share/zsh/site-functions/_keymux"
+    
     install -dm755 "$pkgdir/etc/skel/.config/keymux"
 }

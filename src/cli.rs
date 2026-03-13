@@ -1,4 +1,82 @@
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
+
+/// Get keyboard IDs and names for shell completions
+pub fn get_keyboard_completions() -> Vec<String> {
+    use keymux::keyboard_id::find_all_keyboards;
+
+    let mut completions = vec!["*".to_string()];
+
+    for (id, kb) in find_all_keyboards() {
+        completions.push(id.to_string());
+        let base_id = id
+            .to_string()
+            .split('@')
+            .next()
+            .unwrap_or(&id.to_string())
+            .to_string();
+        if !completions.contains(&base_id) {
+            completions.push(base_id);
+        }
+        if !completions.contains(&kb.name) {
+            completions.push(kb.name);
+        }
+    }
+
+    completions.sort();
+    completions
+}
+
+/// Shell completion generator
+pub fn generate_completions(shell: Shell) {
+    use clap::builder::styling::{AnsiColor, Styles};
+    use clap::CommandFactory;
+    use clap_complete::generate;
+    use std::io;
+
+    let styles = Styles::styled()
+        .header(AnsiColor::Yellow.on_default().bold())
+        .usage(AnsiColor::Yellow.on_default().bold())
+        .literal(AnsiColor::Cyan.on_default().bold())
+        .placeholder(AnsiColor::Cyan.on_default())
+        .error(AnsiColor::Red.on_default().bold())
+        .valid(AnsiColor::Green.on_default().bold())
+        .invalid(AnsiColor::Red.on_default().bold());
+
+    let mut cmd = get_clap_command().styles(styles);
+    let bin_name = cmd.get_name().to_string();
+    generate(shell, &mut cmd, bin_name, &mut io::stdout());
+}
+
+/// Get the clap Command with styles applied for colorized help
+pub fn get_clap_command() -> clap::Command {
+    use clap::builder::styling::{AnsiColor, Styles};
+
+    let styles = Styles::styled()
+        .header(AnsiColor::Yellow.on_default().bold())
+        .usage(AnsiColor::Yellow.on_default().bold())
+        .literal(AnsiColor::Cyan.on_default().bold())
+        .placeholder(AnsiColor::Cyan.on_default())
+        .error(AnsiColor::Red.on_default().bold())
+        .valid(AnsiColor::Green.on_default().bold())
+        .invalid(AnsiColor::Red.on_default().bold());
+
+    Cli::command().styles(styles)
+}
+
+/// Get visible subcommands with their descriptions for completions
+pub fn get_subcommands() -> Vec<(String, String)> {
+    let hidden = ["daemon", "niri-daemon", "completion"];
+    let cmd = Cli::command();
+    cmd.get_subcommands()
+        .filter(|sub| !hidden.contains(&sub.get_name()))
+        .map(|sub| {
+            let name = sub.get_name().to_string();
+            let about = sub.get_about().map(|a| a.to_string()).unwrap_or_default();
+            (name, about)
+        })
+        .collect()
+}
 
 #[derive(Subcommand)]
 pub enum GamemodeAction {
@@ -55,8 +133,35 @@ pub enum Commands {
     /// List all detected keyboards
     List,
 
-    /// Toggle keyboard enable/disable state
-    Toggle,
+    /// Toggle keyboard enable/disable state (opens selection menu)
+    Toggle {
+        /// Keyboard patterns to toggle (ID, name, or "*" for all)
+        patterns: Vec<String>,
+
+        /// Open multi-select menu to choose keyboards
+        #[arg(long, short)]
+        multi: bool,
+    },
+
+    /// Enable specific keyboards
+    Enable {
+        /// Keyboard patterns to enable (ID, name, or "*" for all)
+        patterns: Vec<String>,
+
+        /// Open multi-select menu to choose keyboards
+        #[arg(long, short)]
+        multi: bool,
+    },
+
+    /// Disable specific keyboards
+    Disable {
+        /// Keyboard patterns to disable (ID, name, or "*" for all)
+        patterns: Vec<String>,
+
+        /// Open multi-select menu to choose keyboards
+        #[arg(long, short)]
+        multi: bool,
+    },
 
     /// Control game mode settings
     Gamemode {
@@ -70,7 +175,7 @@ pub enum Commands {
     /// Validate configuration file for errors
     Validate {
         /// Path to config file (default: ~/.config/keymux/config.ron)
-        #[arg(short, long)]
+        #[arg(short = 'f', long = "file", aliases = ["config", "c"])]
         config: Option<std::path::PathBuf>,
     },
 
@@ -80,17 +185,17 @@ pub enum Commands {
     /// Show adaptive timing statistics
     AdaptiveStats {
         /// Path to config file (default: ~/.config/keymux/config.ron)
-        #[arg(short, long)]
+        #[arg(short = 'f', long = "file", aliases = ["config", "c"])]
         config: Option<std::path::PathBuf>,
     },
 
     /// Clear all adaptive timing statistics
     ClearStats,
 
-    /// Generate shell completions
+    /// Generate shell completions (hidden - for package scripts only)
+    #[command(name = "completion", hide = true)]
     Completion {
         /// Shell to generate completions for
-        #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
 }
@@ -119,6 +224,16 @@ pub fn print_help() {
         "  {}  {}",
         "toggle".bright_green().bold(),
         "Toggle keyboard enable/disable state".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "enable".bright_green().bold(),
+        "Enable specific keyboards".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "disable".bright_green().bold(),
+        "Disable specific keyboards".dimmed()
     );
     println!(
         "  {}  {}",
@@ -161,18 +276,28 @@ pub fn print_help() {
     );
     println!(
         "  {}  {}",
-        "keymux toggle".bright_white(),
-        "Select keyboards to enable/disable".dimmed()
+        "keymux toggle --multi".bright_white(),
+        "Select keyboards via menu".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "keymux enable 6912".bright_white(),
+        "Enable keyboard by ID".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "keymux enable \"Keychron\"".bright_white(),
+        "Enable keyboards by name".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "keymux disable 6912".bright_white(),
+        "Disable keyboard by ID".dimmed()
+    );
+    println!(
+        "  {}  {}",
+        "keymux enable \"*\"".bright_white(),
+        "Enable all keyboards".dimmed()
     );
     println!();
-}
-
-pub fn generate_completion(shell: clap_complete::Shell) {
-    use clap::CommandFactory;
-    use clap_complete::generate;
-    use std::io;
-
-    let mut cmd = Cli::command();
-    let bin_name = cmd.get_name().to_string();
-    generate(shell, &mut cmd, bin_name, &mut io::stdout());
 }

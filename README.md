@@ -117,7 +117,14 @@ systemctl --user enable --now keymux-niri.service
 ```ron
 (
     tapping_term_ms: 130,
-    enabled_keyboards: None,
+    enabled_keyboards: [
+        "*",                      // enable all by default
+        // "6913",                 // enable keyboard with 6913 in ID
+        // "Keychron K2",          // enable by keyboard name
+        // "1234": Enable,         // explicit enable (map syntax)
+        // "event3": Disable,      // disable by event path
+        // ("1234", "Enable"),    // explicit enable (tuple syntax)
+    ],
     remaps: { /* base layer keymaps */ },
     layers: { /* additional layers */ },
     game_mode: ( remaps: { /* game mode keymaps */ } ),
@@ -149,6 +156,18 @@ systemctl --user enable --now keymux-niri.service
   - When adaptive timing is enabled, this serves as the initial/fallback threshold
   - 100-130ms: More sensitive to holds
   - 150-200ms: More sensitive to taps
+
+- **enabled_keyboards** - Which keyboards to process:
+  - Absent/omitted: Enable all keyboards (equivalent to `["*"]`)
+  - `None`: Disable all (no keyboards enabled)
+  - `["*"]`: Enable all keyboards
+  - `["1234", "5678"]`: Enable keyboards matching these patterns
+  - `["*", "1234": Disable]`: Enable all except 1234
+  
+  **Syntax options:**
+  - Map style: `"pattern": Enable`, `"pattern": Disable`
+  - Tuple style: `("pattern", "Enable")`, `("pattern", "Disable")`
+  - Bare string: `"1234"` = enable keyboard matching 1234
 
 - **mt_config** - Configuration for Mod-Tap (MT) keys
   - **permissive_hold** (default: true): When another key is pressed while MT is held, resolve immediately to hold
@@ -241,12 +260,14 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 ```ron
 (
     tapping_term_ms: 130,
-    enabled_keyboards: None,
+    enabled_keyboards: [
+        "*",  // enable all keyboards
+    ],
 
     remaps: {
         // Escape/Caps swap
-        KC_CAPS: Key(KC_ESC),
-        KC_ESC: Key(KC_GRV),
+        KC_CAPS: KC_ESC,
+        KC_ESC: KC_GRV,
 
         // Mod-Tap - left hand
         KC_A: MT(KC_A, KC_LGUI),
@@ -272,13 +293,13 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 ```ron
 (
     tapping_term_ms: 130,
-    enabled_keyboards: Some([
-        "2e3c:c365:0110:0003",
-    ]),
+    enabled_keyboards: [
+        "2e3c:c365:0110:0003",  // enable specific keyboard by ID
+    ],
 
     remaps: {
-        KC_CAPS: Key(KC_ESC),
-        KC_ESC: Key(KC_GRV),
+        KC_CAPS: KC_ESC,
+        KC_ESC: KC_GRV,
         KC_LALT: TO("nav"),
 
         KC_A: MT(KC_A, KC_LGUI),
@@ -292,7 +313,7 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
     },
 
     layers: {
-        L_NAV: (
+        "nav": (
             remaps: {
                 // Keep modifiers accessible
                 KC_A: Key(KC_LGUI),
@@ -311,14 +332,14 @@ KC_F2: CMD("/usr/bin/playerctl play-pause"),
 
     game_mode: (
         remaps: {
-            KC_CAPS: Key(KC_ESC),
-            KC_ESC: Key(KC_GRV),
+            KC_CAPS: KC_ESC,
+            KC_ESC: KC_GRV,
 
             // SOCD for FPS gaming
-            KC_W: Socd(KC_W, KC_S),
-            KC_S: Socd(KC_S, KC_W),
-            KC_A: Socd(KC_A, KC_D),
-            KC_D: Socd(KC_D, KC_A),
+            KC_W: SOCD(KC_W, [KC_S]),
+            KC_S: SOCD(KC_S, [KC_W]),
+            KC_A: SOCD(KC_A, [KC_D]),
+            KC_D: SOCD(KC_D, [KC_A]),
         },
     ),
 
@@ -389,8 +410,23 @@ systemctl restart keymux
 # List all detected keyboards
 keymux list
 
-# Toggle which keyboards are enabled (interactive)
+# Toggle which keyboards are enabled (interactive menu)
 keymux toggle
+
+# Enable specific keyboards by ID or name
+keymux enable 6912           # by partial ID
+keymux enable "Keychron"     # by name
+keymux enable "*"            # enable all
+
+# Disable specific keyboards by ID or name  
+keymux disable 6912          # by partial ID
+keymux disable "Built-in"    # by name
+keymux disable "*"           # disable all
+
+# Open multi-select menu to choose keyboards
+keymux toggle --multi
+keymux enable --multi
+keymux disable --multi
 
 # Validate your config
 keymux validate

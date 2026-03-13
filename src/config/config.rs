@@ -3,6 +3,129 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Enable or Disable action for a keyboard entry
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnableDisable {
+    Enable,
+    Disable,
+}
+
+impl Default for EnableDisable {
+    fn default() -> Self {
+        Self::Enable
+    }
+}
+
+/// A single entry in the enabled_keyboards list
+/// Can be a bare string (defaults to Enable) or "pattern": Enable/Disable for explicit action
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub enum EnabledKeyboardEntry {
+    /// Explicit enable/disable with syntax: "1234": Enable or "1234": Disable
+    Explicit(String, EnableDisable),
+    /// Bare string - defaults to Enable
+    Bare(String),
+}
+
+impl<'de> serde::Deserialize<'de> for EnabledKeyboardEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, Visitor};
+        use std::fmt;
+
+        struct EntryVisitor;
+
+        impl<'de> Visitor<'de> for EntryVisitor {
+            type Value = EnabledKeyboardEntry;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a string, tuple (pattern, action), or map {pattern: action}")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                Ok(EnabledKeyboardEntry::Bare(value.to_string()))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let pattern: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+
+                let action_str: String = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+
+                let action = match action_str.as_str() {
+                    "enable" | "Enable" | "ENABLE" => EnableDisable::Enable,
+                    "disable" | "Disable" | "DISABLE" => EnableDisable::Disable,
+                    _ => return Err(de::Error::custom(format!("Unknown action: {}", action_str))),
+                };
+
+                Ok(EnabledKeyboardEntry::Explicit(pattern, action))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let pattern: String = map
+                    .next_key()?
+                    .ok_or_else(|| de::Error::custom("Empty map"))?;
+
+                let action_str: String = map.next_value()?;
+
+                let action = match action_str.as_str() {
+                    "enable" | "Enable" | "ENABLE" => EnableDisable::Enable,
+                    "disable" | "Disable" | "DISABLE" => EnableDisable::Disable,
+                    _ => return Err(de::Error::custom(format!("Unknown action: {}", action_str))),
+                };
+
+                Ok(EnabledKeyboardEntry::Explicit(pattern, action))
+            }
+        }
+
+        deserializer.deserialize_any(EntryVisitor)
+    }
+}
+
+impl EnabledKeyboardEntry {
+    /// Get the pattern (string) part of this entry
+    pub fn pattern(&self) -> &str {
+        match self {
+            Self::Explicit(pattern, _) => pattern,
+            Self::Bare(pattern) => pattern,
+        }
+    }
+
+    /// Get the enable/disable action
+    pub fn action(&self) -> EnableDisable {
+        match self {
+            Self::Explicit(_, action) => *action,
+            Self::Bare(_) => EnableDisable::Enable,
+        }
+    }
+}
+
+impl From<String> for EnabledKeyboardEntry {
+    fn from(s: String) -> Self {
+        EnabledKeyboardEntry::Bare(s)
+    }
+}
+
+impl From<&str> for EnabledKeyboardEntry {
+    fn from(s: &str) -> Self {
+        EnabledKeyboardEntry::Bare(s.to_string())
+    }
+}
+
 /// Layer identifier - fully generic string-based layers
 /// "base" and "game_mode" are reserved layer names
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -317,6 +440,52 @@ impl Default for MtConfig {
     }
 }
 
+/// Wrapper to track if enabled_keyboards was explicitly set in config
+/// This allows distinguishing between "field absent" vs "field set to None"
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EnabledKeyboards {
+    /// Field explicitly set to None (disable all)
+    ExplicitNone,
+    /// Some(None) - legacy format that means disable all
+    SomeNone,
+    /// Field set to a list of entries (bare [....])
+    List(Vec<EnabledKeyboardEntry>),
+    /// Field set to Some([....]) - legacy format, unwrapped to List
+    SomeList(Vec<EnabledKeyboardEntry>),
+}
+
+impl EnabledKeyboards {
+    /// Check if this is ExplicitNone (field was set to None)
+    pub fn is_explicit_none(&self) -> bool {
+        matches!(self, Self::ExplicitNone | Self::SomeNone)
+    }
+
+    /// Get the entries if this is a list
+    pub fn entries(&self) -> Option<&[EnabledKeyboardEntry]> {
+        match self {
+            Self::ExplicitNone | Self::SomeNone => None,
+            Self::List(entries) | Self::SomeList(entries) => Some(entries),
+        }
+    }
+
+    /// Normalize to canonical form (convert legacy Some* variants)
+    pub fn normalize(&self) -> Self {
+        match self {
+            Self::ExplicitNone => Self::ExplicitNone,
+            Self::SomeNone => Self::ExplicitNone,
+            Self::List(entries) => Self::List(entries.clone()),
+            Self::SomeList(entries) => Self::List(entries.clone()),
+        }
+    }
+}
+
+impl Default for EnabledKeyboards {
+    fn default() -> Self {
+        Self::List(vec![EnabledKeyboardEntry::Bare("*".to_string())])
+    }
+}
+
 /// Main configuration structure
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
@@ -325,7 +494,7 @@ pub struct Config {
     #[serde(default)]
     pub mt_config: MtConfig,
     #[serde(default)]
-    pub enabled_keyboards: Option<Vec<String>>,
+    pub enabled_keyboards: EnabledKeyboards,
     #[serde(default)]
     pub remaps: HashMap<KeyCode, KeyAction>,
     #[serde(default)]
@@ -370,10 +539,103 @@ impl Config {
     /// This heuristic allows cleaner config syntax:
     /// - `KC_CAPS: KC_ESC,` → `KC_CAPS: Key(KC_ESC),`
     /// - `MT(KC_A, KC_LGUI)` → `MT(Key(KC_A), Key(KC_LGUI))`
+    /// - `"1234": Enable` → `("1234", Enable)`
+    fn find_enabled_keyboards_array(content: &str) -> Option<(usize, usize)> {
+        let marker = "enabled_keyboards:";
+        if let Some(start) = content.find(marker) {
+            let after_marker = start + marker.len();
+            let rest = &content[after_marker..];
+
+            // Skip whitespace and track the offset
+            let leading_ws = rest.len() - rest.trim_start().len();
+            let rest = rest.trim_start();
+
+            if rest.starts_with("None") {
+                return Some((after_marker + leading_ws, after_marker + leading_ws + 4));
+            }
+
+            if !rest.starts_with('[') {
+                return None;
+            }
+
+            // Find matching ] - track brackets and strings
+            let mut depth = 0;
+            let mut in_string = false;
+            let mut escaped = false;
+
+            for (i, ch) in rest.char_indices() {
+                if escaped {
+                    escaped = false;
+                    continue;
+                }
+                match ch {
+                    '\\' => escaped = true,
+                    '"' => in_string = !in_string,
+                    '[' if !in_string => depth += 1,
+                    ']' if !in_string => {
+                        depth -= 1;
+                        if depth == 0 {
+                            // Return positions in original string
+                            let arr_start = after_marker + leading_ws;
+                            let arr_end = after_marker + leading_ws + i + 1;
+                            return Some((arr_start, arr_end));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
     fn preprocess_config(content: &str) -> String {
         use regex::Regex;
 
-        // Pattern: Match bare KC_* that should be wrapped with Key()
+        // First, preprocess enabled_keyboards entries: "pattern": Enable/Disable -> ("pattern", "Enable") etc
+        let re_enabled = Regex::new(r#""([^"]+)"\s*:\s*(\w+)"#).unwrap();
+
+        let mut result = String::with_capacity(content.len() * 2);
+        let mut last_end = 0;
+
+        // Find and preprocess enabled_keyboards array
+        if let Some((arr_start, arr_end)) = Self::find_enabled_keyboards_array(content) {
+            // Copy content before and within the array, but do replacements only inside array
+            let before_array = &content[last_end..arr_start];
+            let arr_content = &content[arr_start..arr_end];
+            let after_array = &content[arr_end..];
+
+            // Do KC_* preprocessing on content before array (original logic)
+            let re_kc = Regex::new(r"\b(KC_[A-Z0-9_]+)\b").unwrap();
+            let processed_before = Self::preprocess_kc_only(&before_array);
+            result.push_str(&processed_before);
+
+            // Preprocess the array content - convert Enable->"Enable", Disable->"Disable"
+            let preprocessed = re_enabled.replace_all(arr_content, |caps: &regex::Captures| {
+                let pattern = &caps[1];
+                let action_raw = &caps[2];
+                let action = match action_raw.to_lowercase().as_str() {
+                    "enable" => "\"Enable\"",
+                    "disable" => "\"Disable\"",
+                    _ => action_raw,
+                };
+                format!("(\"{}\", {})", pattern, action)
+            });
+
+            result.push_str(&preprocessed);
+
+            // Do KC_* preprocessing on content after array
+            let processed_after = Self::preprocess_kc_only(after_array);
+            result.push_str(&processed_after);
+        } else {
+            // No enabled_keyboards found, just do KC_* preprocessing on everything
+            result = Self::preprocess_kc_only(content);
+        }
+
+        result
+    }
+
+    fn preprocess_kc_only(content: &str) -> String {
+        use regex::Regex;
         let re = Regex::new(r"\b(KC_[A-Z0-9_]+)\b").unwrap();
 
         let mut result = String::with_capacity(content.len() * 2);
@@ -384,25 +646,18 @@ impl Config {
             let end = cap.end();
             let keycode = cap.as_str();
 
-            // Add everything before this match
             result.push_str(&content[last_end..start]);
 
-            // Check what comes AFTER this KC_* to determine if it's a HashMap key
             let suffix = &content[end..];
             let next_char = suffix.trim_start().chars().next();
 
-            // Check what comes BEFORE to see if we should wrap
             let prefix = &content[..start];
             let prev_trimmed = prefix.trim_end();
             let prev_char = prev_trimmed.chars().last();
 
-            // Don't wrap if:
-            // 1. It's followed by a colon (HashMap key): `KC_A:`
-            // 2. It's preceded by "Key(" (already wrapped)
             let is_hashmap_key = next_char == Some(':');
             let already_wrapped = prev_trimmed.ends_with("Key(");
 
-            // Wrap if it's after: colon, open paren, comma, or open bracket
             let should_wrap = !is_hashmap_key
                 && !already_wrapped
                 && matches!(prev_char, Some(':') | Some('(') | Some(',') | Some('['));
@@ -416,7 +671,6 @@ impl Config {
             last_end = end;
         }
 
-        // Add remaining content
         result.push_str(&content[last_end..]);
         result
     }
@@ -457,6 +711,104 @@ impl Config {
             let config_dir =
                 dirs::config_dir().ok_or_else(|| anyhow::anyhow!("Failed to get config dir"))?;
             Ok(config_dir.join("keymux").join("config.ron"))
+        }
+    }
+
+    /// Check if a keyboard should be enabled based on the enabled_keyboards config
+    ///
+    /// Parsing rules (applied in order):
+    /// 1. Field absent entirely → treat as ["*": Enable] (enable all)
+    /// 2. None (ExplicitNone) → disable all
+    /// 3. List → use the list (last match wins)
+    /// 4. Bare string → defaults to Enable
+    pub fn is_keyboard_enabled(
+        &self,
+        keyboard_id: &str,
+        keyboard_name: Option<&str>,
+        event_path: Option<&str>,
+    ) -> bool {
+        // Check the EnabledKeyboards wrapper (normalize first to handle legacy Some* variants)
+        match self.enabled_keyboards.normalize() {
+            // ExplicitNone/SomeNone means field was set to None → disable all
+            EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => {
+                return false;
+            }
+            // List/SomeList of entries - apply matching rules
+            EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => {
+                // If list is empty, disable all
+                if entries.is_empty() {
+                    return false;
+                }
+
+                // Track if we matched "*" (enable all glob)
+                let mut matched_star_enable = false;
+                // Track the final decision (last match wins)
+                let mut final_action: Option<EnableDisable> = None;
+
+                for entry in entries {
+                    let pattern = entry.pattern();
+                    let action = entry.action();
+
+                    // Check for glob "*"
+                    if pattern == "*" {
+                        if action == EnableDisable::Enable {
+                            matched_star_enable = true;
+                        }
+                        final_action = Some(action);
+                        continue;
+                    }
+
+                    // Check if this entry matches the keyboard
+                    // Match against: event path, ID (partial or exact), or keyboard name
+                    let normalized_event =
+                        event_path.map(|e| e.strip_prefix("/dev/input/").unwrap_or(e));
+
+                    let normalized_pattern = pattern.strip_prefix("/dev/input/").unwrap_or(pattern);
+
+                    let matches = if let Some(event) = normalized_event {
+                        // Check event path match (e.g., "event17" or "/dev/input/event17")
+                        pattern == event
+                            || normalized_pattern == event
+                            || keyboard_id.contains(pattern)
+                            || keyboard_id.contains(normalized_pattern)
+                            || keyboard_id.starts_with(pattern)
+                            || keyboard_id.starts_with(normalized_pattern)
+                            || keyboard_name
+                                .map(|name| name.contains(pattern))
+                                .unwrap_or(false)
+                    } else {
+                        // Just check ID match or name match
+                        keyboard_id.contains(pattern)
+                            || keyboard_id.contains(normalized_pattern)
+                            || keyboard_id.starts_with(pattern)
+                            || keyboard_id.starts_with(normalized_pattern)
+                            || keyboard_name
+                                .map(|name| name.contains(pattern))
+                                .unwrap_or(false)
+                    };
+
+                    if matches {
+                        final_action = Some(action);
+                    }
+                }
+
+                // If we matched "*" with enable and nothing else overrode, enable the keyboard
+                if matched_star_enable && final_action.is_none() {
+                    return true;
+                }
+
+                // Return the final action, or true if no matches (enable by default for explicit items)
+                return final_action.unwrap_or(EnableDisable::Enable) == EnableDisable::Enable;
+            }
+        }
+    }
+
+    /// Get the entries for serialization (converts to appropriate format)
+    /// This handles backwards compatibility for saving
+    pub fn get_enabled_keyboards_entries(&self) -> Option<Vec<EnabledKeyboardEntry>> {
+        match self.enabled_keyboards.normalize() {
+            EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => None,
+            EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => Some(entries),
         }
     }
 
@@ -542,6 +894,16 @@ impl Config {
     #[allow(clippy::missing_errors_doc)]
     /// Save only the enabled_keyboards field, preserving all other formatting
     pub fn save_enabled_keyboards_only(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        self.save_enabled_keyboards_only_with_comments(path, None)
+    }
+
+    /// Save enabled_keyboards with optional comments for each pattern
+    #[allow(clippy::missing_errors_doc)]
+    pub fn save_enabled_keyboards_only_with_comments(
+        &self,
+        path: &std::path::Path,
+        comments: Option<&std::collections::HashMap<String, String>>,
+    ) -> anyhow::Result<()> {
         // Read the original file
         let content = std::fs::read_to_string(path)?;
 
@@ -610,24 +972,47 @@ impl Config {
                 return self.save(path);
             }
 
-            // Generate the new value
-            let new_value = self.enabled_keyboards.as_ref().map_or_else(
-                || " None".to_string(),
-                |keyboards| {
+            // Generate the new value (normalize to handle legacy Some* variants)
+            let new_value = match self.enabled_keyboards.normalize() {
+                EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => " None".to_string(),
+                EnabledKeyboards::List(keyboards) | EnabledKeyboards::SomeList(keyboards) => {
                     if keyboards.is_empty() {
-                        " Some([])".to_string()
+                        " []".to_string()
                     } else {
-                        let mut result = " Some([\n".to_string();
+                        let mut result = " [\n".to_string();
                         for kbd in keyboards {
-                            result.push_str(&format!("        \"{}\",\n", kbd));
+                            match kbd {
+                                EnabledKeyboardEntry::Bare(ref pattern) => {
+                                    let comment = comments
+                                        .and_then(|c| c.get(pattern))
+                                        .map(|name| format!(" // {}", name))
+                                        .unwrap_or_default();
+                                    result.push_str(&format!(
+                                        "        \"{}\",{}\n",
+                                        pattern, comment
+                                    ));
+                                }
+                                EnabledKeyboardEntry::Explicit(ref pattern, action) => {
+                                    let action_str = match action {
+                                        EnableDisable::Enable => "Enable",
+                                        EnableDisable::Disable => "Disable",
+                                    };
+                                    let comment = comments
+                                        .and_then(|c| c.get(pattern))
+                                        .map(|name| format!(" // {}", name))
+                                        .unwrap_or_default();
+                                    result.push_str(&format!(
+                                        "        \"{}\": {},{}\n",
+                                        pattern, action_str, comment
+                                    ));
+                                }
+                            }
                         }
-                        result.push_str("    ])");
+                        result.push_str("    ]");
                         result
                     }
-                },
-            );
-
-            // Build the new content
+                }
+            };
             let new_content = format!(
                 "{}{}{}",
                 &content[..field_start],
@@ -782,9 +1167,9 @@ mod tests {
         let expected = "KC_CAPS: Key(KC_ESC),";
         assert_eq!(Config::preprocess_config(input), expected);
 
-        // Test KC_* inside function calls - should not wrap
+        // Test KC_* inside function calls - should wrap (function arguments)
         let input = "KC_A: MT(KC_A, KC_LCTL),";
-        let expected = "KC_A: MT(KC_A, KC_LCTL),";
+        let expected = "KC_A: MT(Key(KC_A), Key(KC_LCTL)),";
         assert_eq!(Config::preprocess_config(input), expected);
 
         // Test multiple bare keycodes
@@ -813,9 +1198,10 @@ mod tests {
         let input = r#"KC_LALT: TO("nav"),"#;
         assert_eq!(Config::preprocess_config(input), input);
 
-        // SOCD action
+        // SOCD action - KC inside function calls should be wrapped
         let input = "KC_W: SOCD(KC_W, [KC_S]),";
-        assert_eq!(Config::preprocess_config(input), input);
+        let expected = "KC_W: SOCD(Key(KC_W), [Key(KC_S)]),";
+        assert_eq!(Config::preprocess_config(input), expected);
 
         // CMD action
         let input = r#"KC_F1: CMD("/usr/bin/test"),"#;

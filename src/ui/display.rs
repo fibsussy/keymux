@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, EnableDisable, EnabledKeyboardEntry, EnabledKeyboards};
 use crate::keyboard_id::{find_all_keyboards, is_keyboard_device};
 use colored::Colorize;
 use std::fs;
@@ -172,17 +172,31 @@ impl ConfigDisplay {
     }
 
     fn print_config_details(&self, config: &Config) {
-        // Enabled keyboards
-        if let Some(enabled_keyboards) = &config.enabled_keyboards {
-            println!(
-                "  Enabled Keyboards: {}",
-                enabled_keyboards.len().to_string().bright_blue()
-            );
-            for kb in enabled_keyboards {
-                println!("    - {}", kb.bright_white());
+        // Enabled keyboards (normalize to handle legacy Some* variants)
+        match config.enabled_keyboards.normalize() {
+            EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => {
+                println!("  Enabled Keyboards: {}", "None (all disabled)".dimmed());
             }
-        } else {
-            println!("  Enabled Keyboards: {}", "All (none specified)".dimmed());
+            EnabledKeyboards::List(enabled_keyboards)
+            | EnabledKeyboards::SomeList(enabled_keyboards) => {
+                println!(
+                    "  Enabled Keyboards: {}",
+                    enabled_keyboards.len().to_string().bright_blue()
+                );
+                for kb in enabled_keyboards {
+                    let display = match kb {
+                        EnabledKeyboardEntry::Bare(pattern) => pattern.clone(),
+                        EnabledKeyboardEntry::Explicit(pattern, action) => {
+                            let action_str = match action {
+                                EnableDisable::Enable => "Enable",
+                                EnableDisable::Disable => "Disable",
+                            };
+                            format!("{}: {}", pattern, action_str)
+                        }
+                    };
+                    println!("    - {}", display.bright_white());
+                }
+            }
         }
 
         // Tapping term

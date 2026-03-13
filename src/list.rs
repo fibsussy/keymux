@@ -20,7 +20,6 @@ pub fn run_list() -> Result<()> {
     // Load current config to check enabled keyboards
     let config_path = Config::default_path()?;
     let config = Config::load(&config_path)?;
-    let enabled_set: Vec<String> = config.enabled_keyboards.unwrap_or_default();
 
     // Find all keyboards
     let keyboards = find_all_keyboards();
@@ -55,7 +54,7 @@ pub fn run_list() -> Result<()> {
     println!();
 
     for (id, name) in &items {
-        let is_enabled = enabled_set.contains(&id.to_string());
+        let is_enabled = config.is_keyboard_enabled(&id.to_string(), Some(name), None);
 
         if is_enabled {
             println!("    {} {}", "✓".bright_green().bold(), name.green());
@@ -72,7 +71,7 @@ pub fn run_list() -> Result<()> {
     // Summary
     let enabled_count = items
         .iter()
-        .filter(|(id, _)| enabled_set.contains(&id.to_string()))
+        .filter(|(id, name)| config.is_keyboard_enabled(&id.to_string(), Some(name), None))
         .count();
     let disabled_count = items.len() - enabled_count;
 

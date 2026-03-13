@@ -306,11 +306,15 @@ impl AsyncDaemon {
                     // Check if keyboard is still enabled in their config
                     if let Some(config_mgr) = self.user_configs.get(&owner_uid) {
                         let config = config_mgr.get_config().await;
-                        let enabled = config
-                            .enabled_keyboards
-                            .as_ref()
-                            .map(|list| list.iter().any(|e| kbd_id.matches_config_entry(e)))
-                            .unwrap_or(false);
+                        let event_path = meta
+                            .paths
+                            .first()
+                            .and_then(|p| p.file_name().and_then(|n| n.to_str()));
+                        let enabled = config.is_keyboard_enabled(
+                            &kbd_id.to_string(),
+                            Some(&meta.name),
+                            event_path,
+                        );
 
                         if enabled {
                             assigned_uid = Some(owner_uid);
@@ -339,11 +343,15 @@ impl AsyncDaemon {
                     }
 
                     let config = config_mgr.get_config().await;
-                    let wants_keyboard = config
-                        .enabled_keyboards
-                        .as_ref()
-                        .map(|list| list.iter().any(|e| kbd_id.matches_config_entry(e)))
-                        .unwrap_or(false);
+                    let event_path = meta
+                        .paths
+                        .first()
+                        .and_then(|p| p.file_name().and_then(|n| n.to_str()));
+                    let wants_keyboard = config.is_keyboard_enabled(
+                        &kbd_id.to_string(),
+                        Some(&meta.name),
+                        event_path,
+                    );
 
                     if wants_keyboard {
                         info!("Assigning keyboard {} to user {}", meta.name, uid);
@@ -1175,11 +1183,16 @@ impl AsyncDaemon {
             }
             IpcRequest::ListKeyboards => {
                 // Collect all enabled_keyboards entries from all user configs for annotation
-                let mut all_config_entries: Vec<String> = Vec::new();
+                let mut all_config_entries: Vec<(String, bool)> = Vec::new(); // (pattern, is_enable)
                 for config_mgr in self.user_configs.values() {
                     let config = config_mgr.get_config().await;
-                    if let Some(entries) = &config.enabled_keyboards {
-                        all_config_entries.extend(entries.iter().cloned());
+                    if let Some(entries) = config.get_enabled_keyboards_entries() {
+                        for entry in entries {
+                            let pattern = entry.pattern().to_string();
+                            let is_enable =
+                                entry.action() == crate::config::config::EnableDisable::Enable;
+                            all_config_entries.push((pattern, is_enable));
+                        }
                     }
                 }
 
@@ -1205,7 +1218,70 @@ impl AsyncDaemon {
                         let enabled_by_portless = enabled
                             && all_config_entries
                                 .iter()
-                                .any(|e| id.matches_config_entry(e) && !e.contains('@'));
+                                .any(|(e, _)| id.matches_config_entry(e) && !e.contains('@'));
+
+                        // Find the matching rule that determined this keyboard's enabled state
+                        let keyboard_id_str = id.to_string();
+                        let keyboard_name = Some(meta.name.as_str());
+                        let event_path = meta
+                            .paths
+                            .first()
+                            .and_then(|p| p.file_name().and_then(|n| n.to_str()));
+
+                        let mut matched_rule: Option<String> = None;
+                        let mut last_action: Option<bool> = None;
+
+                        // Apply matching rules (last match wins)
+                        for (pattern, is_enable) in &all_config_entries {
+                            // Check for glob "*"
+                            if *pattern == "*" {
+                                matched_rule = Some(pattern.clone());
+                                last_action = Some(*is_enable);
+                                continue;
+                            }
+
+                            // Check if this entry matches the keyboard
+                            let matches = if let Some(event) = event_path {
+                                // Check event path match (e.g., "event17")
+                                pattern == event
+                                    || keyboard_id_str.contains(pattern)
+                                    || keyboard_id_str.starts_with(pattern)
+                                    || keyboard_name
+                                        .map(|name| name.contains(pattern))
+                                        .unwrap_or(false)
+                            } else {
+                                // Just check ID match or name match
+                                keyboard_id_str.contains(pattern)
+                                    || keyboard_id_str.starts_with(pattern)
+                                    || keyboard_name
+                                        .map(|name| name.contains(pattern))
+                                        .unwrap_or(false)
+                            };
+
+                            if matches {
+                                matched_rule = Some(pattern.clone());
+                                last_action = Some(*is_enable);
+                            }
+                        }
+
+                        // Determine implicit vs explicit state
+                        let _effective_enabled = if let Some(action) = last_action {
+                            action
+                        } else if !all_config_entries.is_empty() {
+                            // No rule matched, but there are rules - default to enabled (backward compat)
+                            true
+                        } else {
+                            // No config entries at all - implicit enable (default behavior)
+                            true
+                        };
+
+                        // Only set matched_rule if the keyboard's state matches the rule
+                        // If it's implicit (no rule matched), set to None
+                        let matched_rule = if last_action.is_some() {
+                            matched_rule
+                        } else {
+                            None
+                        };
 
                         crate::ipc::KeyboardInfo {
                             hardware_id: id.to_string(),
@@ -1214,6 +1290,7 @@ impl AsyncDaemon {
                             enabled,
                             connected: meta.connected,
                             enabled_by_portless,
+                            matched_rule,
                         }
                     })
                     .collect();

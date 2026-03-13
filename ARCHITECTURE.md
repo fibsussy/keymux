@@ -56,39 +56,65 @@ layers: {
 
 ---
 
-#### 2. **Home Row Mods (HR)**
+#### 2. **Mod-Tap (MT)**
+**formerly "Home Row Mods (HR)"**
 
-**Tap for letter, hold for modifier** - works on **ANY key**, not just ASDF JKL;
+**Tap for letter, hold for modifier** - works on **ANY key**, not just home row.
 
-**Syntax:** `HR(tap_key, hold_key)`
+**Syntax:** `MT(tap_key, hold_key)`
 
 **Example:**
 ```ron
 remaps: {
     // Traditional QWERTY home row mods
-    KC_A: HR(KC_A, KC_LGUI),   // Tap A, hold for Super
-    KC_S: HR(KC_S, KC_LALT),   // Tap S, hold for Alt
-    KC_D: HR(KC_D, KC_LCTL),   // Tap D, hold for Ctrl
-    KC_F: HR(KC_F, KC_LSFT),   // Tap F, hold for Shift
+    KC_A: MT(KC_A, KC_LGUI),   // Tap A, hold for Super
+    KC_S: MT(KC_S, KC_LALT),   // Tap S, hold for Alt
+    KC_D: MT(KC_D, KC_LCTL),   // Tap D, hold for Ctrl
+    KC_F: MT(KC_F, KC_LSFT),   // Tap F, hold for Shift
     
     // Colemak/Dvorak/custom home rows work too!
-    KC_T: HR(KC_T, KC_LGUI),
-    KC_N: HR(KC_N, KC_LSFT),
+    KC_T: MT(KC_T, KC_LGUI),
+    KC_N: MT(KC_N, KC_LSFT),
     
     // Even non-home-row keys!
-    KC_SPC: HR(KC_SPC, KC_LSFT),
+    KC_SPC: MT(KC_SPC, KC_LSFT),
+    
+    // Nested actions - tap for Tab, hold for nav layer
+    KC_TAB: MT(KC_TAB, TO("nav")),
 }
+```
+
+**MT Config (tuning):**
+```ron
+mt_config: (
+    tapping_term_ms: 175,              // How long to wait for hold
+    permissive_hold: true,             // If another key pressed, immediately activate modifier
+    same_hand_roll_detection: true,    // Rolls on same hand favor tap
+    opposite_hand_chord_detection: true, // Chords on opposite hands favor hold
+    multi_mod_detection: true,        // Multiple modifiers held simultaneously
+    double_tap_then_hold: false,       // Double-tap then hold = repeat tap key
+    double_tap_window_ms: 300,         // Window for double-tap detection
+    cross_hand_unwrap: true,           // Holding modifier on one hand unwraps MT on other
+    adaptive_timing: false,             // Learn user's tap speed and adjust threshold
+    roll_detection_window_ms: 150,    // Window for roll detection
+    chord_detection_window_ms: 50,     // Window for chord detection
+),
 ```
 
 **Features:**
 - **Permissive hold**: If another key is pressed while holding, immediately activates modifier
-- **Double-tap-and-hold**: Double-tap then hold = repeat the tap key (hold 'a' instead of Gui)
-- **Configurable timing**: `tapping_term_ms` controls tap vs hold threshold
+- **Same-hand roll detection**: Rolls on same hand favor tap (type "as" quickly → both letters)
+- **Opposite-hand chord detection**: Chords on opposite hands favor hold
+- **Multi-mod detection**: Multiple modifiers held simultaneously all promote to hold
+- **Double-tap-and-hold**: Double-tap then hold = repeat the tap key
+- **Cross-hand unwrap**: Holding a modifier on one hand unwraps MT keys on the other hand to tap
+- **Adaptive timing**: Learns your average tap duration and adjusts threshold automatically
 - **Works on ANY key**: Not limited to home row positions
+- **Recursive actions**: MT can nest any other actions (even other MT, TO, etc.)
 
 **How it works:**
-1. Press HR key → marked as "pending"
-2. If another key pressed → resolve to modifier (permissive hold)
+1. Press MT key → marked as "pending"
+2. If another key pressed → resolve based on roll/chord detection
 3. If released quickly → emit tap key
 4. If held past threshold → emit modifier
 5. Double-tap quickly → hold the tap key instead
@@ -99,46 +125,75 @@ remaps: {
 - Ergonomic keyboard layouts
 - One-handed typing setups
 
+**Use cases:**
+- Reduce finger travel to modifiers
+- Custom layouts (Colemak, Dvorak, Workman)
+- Ergonomic keyboard layouts
+- One-handed typing setups
+
+**Note:** The original OVERLOAD action is now fully covered by MT with configurable settings. Use MT with `permissive_hold: false` for pure timing-based behavior.
+
 ---
 
-#### 3. **OVERLOAD (Simple Tap/Hold)**
+#### 3. **OneShot Modifier (OSM)**
 
-**Like HR mods but simpler** - no permissive hold, just timing-based. Works on **ANY key**.
+**Tap once, modifier stays active for exactly one keypress** - perfect for typing capital letters.
 
-**Syntax:** `OVERLOAD(tap_key, hold_key)`
+**Syntax:** `OSM(modifier_action)`
 
 **Example:**
 ```ron
 remaps: {
-    KC_SPC: OVERLOAD(KC_SPC, KC_LCTL),  // Space or Ctrl
-    KC_ENT: OVERLOAD(KC_ENT, KC_LSFT),  // Enter or Shift
-    KC_TAB: OVERLOAD(KC_TAB, KC_LGUI),  // Tab or Super
+    // Tap Shift once, next letter is capitalized
+    KC_LSFT: OSM(KC_LSFT),
+    KC_LCTL: OSM(KC_LCTL),
+    KC_LALT: OSM(KC_LALT),
+    KC_LGUI: OSM(KC_LGUI),
 }
 ```
 
-**Difference from HR:**
-- **No permissive hold**: Other keys don't trigger modifier early
-- **Pure timing**: Only `tapping_term_ms` determines behavior
-- **Simpler logic**: Easier to predict
-
 **How it works:**
-1. Press OVERLOAD key → wait for release or timeout
-2. If released before `tapping_term_ms` → tap key
-3. If held past `tapping_term_ms` → modifier key
-4. Double-tap → hold the tap key
+1. Press OSM key → modifier activates
+2. Press any other key → modifier activates with that key, then OSM deactivates
+3. If no key pressed within timeout → OSM auto-releases
 
-**Use cases:**
-- Space/Shift for aggressive typists
-- Modifier keys you want explicit control over
-- Keys where permissive hold is too aggressive
+**Configuration:**
+```ron
+oneshot_timeout_ms: 5000,  // OSM auto-releases after 5 seconds of idle
+```
 
 ---
 
-#### 4. **SOCD (Simultaneous Opposite Cardinal Directions)**
+#### 4. **Double-Tap / Tap Dance (DT)**
+
+**Single tap performs one action, double tap performs another** - QMK-style tap dance.
+
+**Syntax:** `DT(single_tap_action, double_tap_action)`
+
+**Example:**
+```ron
+remaps: {
+    // Single tap = Escape, Double tap = Caps Lock (toggle)
+    KC_ESC: DT(KC_ESC, TO("game_mode")),
+    // Single tap = Alt, Double tap = nav layer
+    KC_LALT: DT(KC_LALT, TO("nav")),
+}
+```
+
+**How it works:**
+1. Press key once → starts timer, waits for potential second tap
+2. Release before double_tap_window_ms → check for second press
+3. Second press detected within window → double tap action triggers
+4. No second press → single tap action triggers
+5. Timeout expires → single tap action triggers
+
+---
+
+#### 5. **SOCD (Simultaneous Opposite Cardinal Directions)**
 
 **Generic SOCD for gaming** - no longer hardcoded to WASD!
 
-**Syntax:** `Socd { this_key: KC_X, opposing_key: KC_Y }`
+**Syntax:** `SOCD(this_key_action, [opposing_key_actions...])`
 
 **Strategy:** Last Input Priority (LIP) - pressing W then S = S wins, release S = W reactivates
 
@@ -146,21 +201,17 @@ remaps: {
 ```ron
 game_mode: (
     remaps: {
-        // WASD SOCD (default)
-        KC_W: Socd { this_key: KC_W, opposing_key: KC_S },
-        KC_S: Socd { this_key: KC_S, opposing_key: KC_W },
-        KC_A: Socd { this_key: KC_A, opposing_key: KC_D },
-        KC_D: Socd { this_key: KC_D, opposing_key: KC_A },
+        // WASD SOCD
+        KC_W: SOCD(KC_W, [KC_S]),
+        KC_S: SOCD(KC_S, [KC_W]),
+        KC_A: SOCD(KC_A, [KC_D]),
+        KC_D: SOCD(KC_D, [KC_A]),
         
         // Arrow keys SOCD (for racing games!)
-        KC_UP: Socd { this_key: KC_UP, opposing_key: KC_DOWN },
-        KC_DOWN: Socd { this_key: KC_DOWN, opposing_key: KC_UP },
-        KC_LEFT: Socd { this_key: KC_LEFT, opposing_key: KC_RGHT },
-        KC_RGHT: Socd { this_key: KC_RGHT, opposing_key: KC_LEFT },
-        
-        // Custom game bindings
-        KC_I: Socd { this_key: KC_I, opposing_key: KC_K },  // Forward/Back
-        KC_K: Socd { this_key: KC_K, opposing_key: KC_I },
+        KC_UP: SOCD(KC_UP, [KC_DOWN]),
+        KC_DOWN: SOCD(KC_DOWN, [KC_UP]),
+        KC_LEFT: SOCD(KC_LEFT, [KC_RGHT]),
+        KC_RGHT: SOCD(KC_RGHT, [KC_LEFT]),
     },
 )
 ```
@@ -180,7 +231,7 @@ game_mode: (
 
 ---
 
-#### 5. **Command Runner**
+#### 6. **Command Runner**
 
 **Execute arbitrary shell commands on key press**
 
@@ -208,47 +259,53 @@ remaps: {
 
 ---
 
-#### 6. **Layer Switching**
+#### 7. **Layer Switching**
 
-**Switch to any named layer while key is held**
+**Switch to any named layer while key is held, toggled, or momentary**
 
-**Syntax:** `TO("layer_name")`
+**Syntax:** 
+- `TO("layer_name")` - Hold to switch, release to return to base
+- `MO("layer_name")` - Alias for TO (momentary)
+- `TG("layer_name")` - Toggle: press to activate, press again to deactivate
+- `Transparent` - Fall through to lower layer (ignore this key on current layer)
 
 **Example:**
 ```ron
 remaps: {
     KC_CAPS: TO("nav"),      // Hold Caps Lock → Nav layer
     KC_TAB: TO("symbols"),   // Hold Tab → Symbol layer  
-    KC_LSFT: TO("num"),      // Hold Shift → Number layer
+    KC_LSFT: MO("num"),      // Hold Shift → Number layer
+    KC_SCRL: TG("game_mode"), // Scroll Lock toggle → Game mode
 }
 ```
 
 **How it works:**
-1. Press layer switch key → switch to that layer
-2. All key lookups now check: Game Mode → Active Layer → Base
-3. Release layer switch key → return to base layer
+1. **TO/MO**: Press layer switch key → switch to that layer. Release → return to base layer
+2. **TG**: Press to toggle layer on/off. Press again to deactivate
+3. All key lookups check: Game Mode → Active Layer → Base
 4. Layers can be nested (layer key in another layer)
+5. **Transparent**: Looks up the key on the next lower layer instead
 
 ---
 
-#### 7. **Simple Key Remapping**
+#### 8. **Simple Key Remapping**
 
 **Remap any key to any other key**
 
-**Syntax:** `Key(KC_OUTPUT)`
+**Syntax:** `KC_OUTPUT` (the Key() wrapper is optional via preprocessor)
 
 **Example:**
 ```ron
 remaps: {
-    KC_CAPS: Key(KC_ESC),        // Caps Lock → Escape
-    KC_ESC: Key(KC_GRV),         // Escape → Backtick
-    KC_RGHT: Key(KC_BSPC),       // Right Arrow → Backspace
+    KC_CAPS: KC_ESC,        // Caps Lock → Escape
+    KC_ESC: KC_GRV,         // Escape → Backtick
+    KC_RGHT: KC_BSPC,       // Right Arrow → Backspace
 }
 ```
 
 ---
 
-#### 8. **Game Mode (Automatic Detection)**
+#### 9. **Game Mode (Automatic Detection)**
 
 **Special layer activated during gaming** - auto-detected or manual toggle
 
@@ -265,20 +322,20 @@ Game mode is automatically detected via Steam/Gamescope or IS_GAME environment v
 ```ron
 game_mode: (
     remaps: {
-        // Disable home row mods in games
-        KC_A: Key(KC_A),
-        KC_S: Key(KC_S),
-        KC_D: Key(KC_D),
-        KC_F: Key(KC_F),
+        // Disable MT mods in games (use plain Key)
+        KC_A: KC_A,
+        KC_S: KC_S,
+        KC_D: KC_D,
+        KC_F: KC_F,
         
         // Add SOCD
-        KC_W: Socd { this_key: KC_W, opposing_key: KC_S },
-        KC_S: Socd { this_key: KC_S, opposing_key: KC_W },
-        KC_A: Socd { this_key: KC_A, opposing_key: KC_D },
-        KC_D: Socd { this_key: KC_D, opposing_key: KC_A },
+        KC_W: SOCD(KC_W, [KC_S]),
+        KC_S: SOCD(KC_S, [KC_W]),
+        KC_A: SOCD(KC_A, [KC_D]),
+        KC_D: SOCD(KC_D, [KC_A]),
         
         // Keep essential remaps
-        KC_CAPS: Key(KC_ESC),
+        KC_CAPS: KC_ESC,
     },
 )
 ```
@@ -312,13 +369,13 @@ keyboard_overrides: {
         ),
         keymap: (
             base_remaps: {
-                KC_CAPS: Key(KC_LCTL),  // Different for this one
+                KC_CAPS: KC_LCTL,  // Different for this one
             },
             layers: {
                 "nav": ( remaps: { /* custom nav */ } ),
             },
             game_mode_remaps: {
-                KC_W: Key(KC_UP),  // Different game binds
+                KC_W: KC_UP,  // Different game binds
             },
         ),
     ),
@@ -429,12 +486,14 @@ keyboard_overrides: {
    └─────────────────────────────┘
          ↓
 5. Action Processing
-   ├─ Key(x) → Emit key x
-   ├─ HR(tap, hold) → Permissive hold logic
-   ├─ OVERLOAD(tap, hold) → Timing logic
-   ├─ TO(layer) → Switch layer
-   ├─ SOCD() → SOCD resolution
-   └─ CMD(command) → Execute shell command
+    ├─ Key(x) → Emit key x
+    ├─ MT(tap, hold) → Mod-Tap logic with roll/chord detection
+    ├─ OSM(modifier) → OneShot Modifier
+    ├─ DT(tap, dtap) → Double-Tap / Tap Dance
+    ├─ TO/TG/MO(layer) → Layer switch/toggle/momentary
+    ├─ Transparent → Fall through to lower layer
+    ├─ SOCD() → SOCD resolution
+    └─ CMD(command) → Execute shell command
          ↓
 6. Virtual uinput Device
          ↓
@@ -481,7 +540,7 @@ Game mode state is preserved across thread restarts:
 
 ### Keymap Processing Logic
 
-#### Home Row Mods (Detailed)
+#### Mod-Tap (MT) Processing (Detailed)
 
 **State Machine:**
 ```
@@ -580,14 +639,14 @@ We use **RON (Rusty Object Notation)** - Rust's equivalent to JSON but more ergo
 (
     tapping_term_ms: 175,
     remaps: {
-        KC_A: HR(KC_A, KC_LGUI),
+        KC_A: MT(KC_A, KC_LGUI),
         KC_CAPS: TO("nav"),
     },
     layers: {
         "nav": (
             remaps: {
-                KC_H: Key(KC_LEFT),
-                KC_J: Key(KC_DOWN),
+                KC_H: KC_LEFT,
+                KC_J: KC_DOWN,
             },
         ),
     },
@@ -624,748 +683,15 @@ Example: 1234:5678:0100:0003:usb-0000:00:14.0-1/input0
 
 ## Implementation Roadmap
 
-### Current State vs Target State
-
-#### ✅ Already Implemented (Keep As-Is)
-
-1. **Multi-user daemon architecture** - Root daemon with per-user session management
-2. **Thread-per-event-file** - Parallel processing for complex keyboards
-3. **Game mode state preservation** - Survives thread restarts
-4. **Hybrid sync/async** - Sync hot path, async management
-5. **udev hotplug monitoring** - No periodic polling, pure event-driven
-6. **IPC server** - Multi-user command interface
-7. **Niri window monitor** - Automatic game mode detection
-8. **Per-keyboard overrides** - Different configs per device
-9. **Home row mods with permissive hold** - Advanced tap/hold logic
-10. **OVERLOAD action** - Simple tap/hold without permissive hold
-11. **Basic key remapping** - Direct key-to-key mapping
-12. **Layer switching (TO action)** - Hold-to-activate layers
-13. **Config hot-reload** - Via IPC commands
-14. **Graceful shutdown** - Proper device ungrab and cleanup
-15. **Virtual device creation** - uinput integration
-
-#### ❌ Needs Implementation/Fixing
-
-1. **Generic layers** - Currently hardcoded to 5 enum variants, need String-based
-2. **Generic SOCD** - Currently hardcoded to WASD only, need config-driven
-3. **Generic HR mods** - Currently limited to ASDF JKL; keys, need any-key support
-4. **Expanded KeyCode enum** - Only ~70 keys, need 150+ (media, numpad, etc.)
-5. **SOCD state management** - Hardcoded booleans, need dynamic HashMap-based
-7. **HR mod double-tap tracking** - Fixed-size array, need HashMap
-8. **evdev ↔ KeyCode conversions** - Only covers basic keys, need all keys
-
----
-
-### Phase 1: Core Type System Refactor
-
-**Goal:** Make config types fully generic and extensible
-
-#### 1.1 Layer System (`config.rs`)
-
-**Current:**
-```rust
-pub enum Layer {
-    L_BASE,
-    L_NAV,
-    L_NUM,
-    L_SYM,
-    L_FN,
-}
-```
-
-**Target:**
-```rust
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Layer(pub String);
-
-impl Layer {
-    pub fn base() -> Self {
-        Layer("base".to_string())
-    }
-    
-    pub fn is_base(&self) -> bool {
-        self.0 == "base"
-    }
-    
-    pub fn new(name: impl Into<String>) -> Self {
-        Layer(name.into())
-    }
-}
-```
-
-**Files to modify:**
-- `src/config.rs` - Layer definition (DONE)
-- `src/keymap.rs` - Replace all Layer::L_BASE with Layer::base()
-- `src/config.rs` - Update Config struct field types
-- `config.example.ron` - Update example to use string-based layers
-
-**Config format change:**
-```ron
-// OLD
-layers: {
-    L_NAV: ( remaps: { ... } ),
-}
-
-// NEW
-layers: {
-    "nav": ( remaps: { ... } ),
-    "symbols": ( remaps: { ... } ),
-    "my_custom_layer": ( remaps: { ... } ),
-}
-```
-
-#### 1.2 Action Types (`config.rs`)
-
-**Current:**
-```rust
-pub enum Action {
-    Key(KeyCode),
-    HR(KeyCode, KeyCode),
-    OVERLOAD(KeyCode, KeyCode),
-    TO(Layer),
-    Socd(KeyCode, KeyCode),  // ❌ Only works with WASD
-}
-```
-
-**Target:**
-```rust
-pub enum Action {
-    Key(KeyCode),
-    HR(KeyCode, KeyCode),
-    OVERLOAD(KeyCode, KeyCode),
-    TO(Layer),
-    SOCD(KeyCode, Vec<KeyCode>),  // Stack-based last-input-priority
-    CMD(String),  // Execute shell command
-}
-```
-
-**Files to modify:**
-- `src/config.rs` - Action enum definition (DONE)
-- `src/keymap.rs` - Update all pattern matches for SOCD and CMD
-- `config.example.ron` - Update examples
-
-**Config format change:**
-```ron
-// OLD
-KC_W: Socd(KC_W, KC_S),
-
-// NEW  
-KC_W: SOCD(KC_W, [KC_S]),
-KC_F1: CMD("/usr/bin/notify-send 'Hello'"),
-```
-
----
-
-### Phase 2: KeyCode Expansion
-
-**Goal:** Support all possible keyboard keys (150+ total)
-
-#### 2.1 Expand KeyCode Enum (`config.rs`)
-
-**Add these categories:**
-
-```rust
-pub enum KeyCode {
-    // ===== EXISTING (Keep) =====
-    // Letters: KC_A to KC_Z
-    // Numbers: KC_1 to KC_0
-    // Modifiers: KC_LCTL, KC_LSFT, KC_LALT, KC_LGUI, KC_RCTL, KC_RSFT, KC_RALT, KC_RGUI
-    // Special: KC_ESC, KC_CAPS, KC_TAB, KC_SPC, KC_ENT, KC_BSPC, KC_DEL, etc.
-    // Arrows: KC_LEFT, KC_DOWN, KC_UP, KC_RGHT
-    // F-keys: KC_F1 to KC_F12
-    
-    // ===== NEW ADDITIONS =====
-    
-    // Navigation (6 keys)
-    KC_PGUP,
-    KC_PGDN,
-    KC_HOME,
-    KC_END,
-    KC_INS,
-    KC_PSCR,  // Print Screen
-    
-    // Numpad (17 keys)
-    KC_KP_0,
-    KC_KP_1,
-    KC_KP_2,
-    KC_KP_3,
-    KC_KP_4,
-    KC_KP_5,
-    KC_KP_6,
-    KC_KP_7,
-    KC_KP_8,
-    KC_KP_9,
-    KC_KP_SLASH,
-    KC_KP_ASTERISK,
-    KC_KP_MINUS,
-    KC_KP_PLUS,
-    KC_KP_ENTER,
-    KC_KP_DOT,
-    KC_NUM_LOCK,
-    
-    // Media Keys (8 keys)
-    KC_MUTE,
-    KC_VOL_UP,
-    KC_VOL_DN,
-    KC_MEDIA_PLAY_PAUSE,
-    KC_MEDIA_STOP,
-    KC_MEDIA_NEXT_TRACK,
-    KC_MEDIA_PREV_TRACK,
-    KC_MEDIA_SELECT,
-    
-    // System Keys (12 keys)
-    KC_PWR,
-    KC_SLEP,
-    KC_WAKE,
-    KC_CALC,
-    KC_MY_COMP,
-    KC_WWW_SEARCH,
-    KC_WWW_HOME,
-    KC_WWW_BACK,
-    KC_WWW_FORWARD,
-    KC_WWW_STOP,
-    KC_WWW_REFRESH,
-    KC_WWW_FAVORITES,
-    
-    // Locking Keys (2 keys)
-    KC_SCRL,  // Scroll Lock
-    KC_PAUS,  // Pause/Break
-    
-    // Extended F-keys (12 keys)
-    KC_F13,
-    KC_F14,
-    KC_F15,
-    KC_F16,
-    KC_F17,
-    KC_F18,
-    KC_F19,
-    KC_F20,
-    KC_F21,
-    KC_F22,
-    KC_F23,
-    KC_F24,
-    
-    // Application Keys (2 keys)
-    KC_APP,
-    KC_MENU,
-    
-    // Multimedia (7 keys)
-    KC_BRIU,  // Brightness Up
-    KC_BRID,  // Brightness Down
-    KC_DISPLAY_OFF,
-    KC_WLAN,
-    KC_TOOLS,
-    KC_BLUETOOTH,
-    KC_KEYBOARD_LAYOUT,
-    
-    // International Keys (3 keys)
-    KC_INTL_BACKSLASH,  // 102nd key on European keyboards
-    KC_INTL_YEN,
-    KC_INTL_RO,
-}
-```
-
-**Total new keys:** ~70
-**Total keys after expansion:** ~150
-
-**Files to modify:**
-- `src/config.rs` - Add all new KeyCode variants
-
-#### 2.2 Expand evdev Conversions (`keymap.rs`)
-
-**Add conversion functions for all new keys:**
-
-```rust
-pub const fn evdev_to_keycode(key: Key) -> Option<KeyCode> {
-    match key {
-        // ... existing conversions ...
-        
-        // NEW: Navigation
-        Key::KEY_PAGEUP => Some(KeyCode::KC_PGUP),
-        Key::KEY_PAGEDOWN => Some(KeyCode::KC_PGDN),
-        Key::KEY_HOME => Some(KeyCode::KC_HOME),
-        Key::KEY_END => Some(KeyCode::KC_END),
-        Key::KEY_INSERT => Some(KeyCode::KC_INS),
-        Key::KEY_SYSRQ => Some(KeyCode::KC_PSCR),
-        
-        // NEW: Numpad
-        Key::KEY_KP0 => Some(KeyCode::KC_KP_0),
-        Key::KEY_KP1 => Some(KeyCode::KC_KP_1),
-        // ... all numpad keys ...
-        Key::KEY_NUMLOCK => Some(KeyCode::KC_NUM_LOCK),
-        
-        // NEW: Media
-        Key::KEY_MUTE => Some(KeyCode::KC_MUTE),
-        Key::KEY_VOLUMEUP => Some(KeyCode::KC_VOL_UP),
-        Key::KEY_VOLUMEDOWN => Some(KeyCode::KC_VOL_DN),
-        Key::KEY_PLAYPAUSE => Some(KeyCode::KC_MEDIA_PLAY_PAUSE),
-        // ... all media keys ...
-        
-        // NEW: System
-        Key::KEY_POWER => Some(KeyCode::KC_PWR),
-        Key::KEY_SLEEP => Some(KeyCode::KC_SLEP),
-        // ... all system keys ...
-        
-        // NEW: F13-F24
-        Key::KEY_F13 => Some(KeyCode::KC_F13),
-        // ... F14-F24 ...
-        
-        _ => None,
-    }
-}
-
-pub const fn keycode_to_evdev(keycode: KeyCode) -> Key {
-    match keycode {
-        // ... existing conversions ...
-        
-        // NEW: All new keys
-        KeyCode::KC_PGUP => Key::KEY_PAGEUP,
-        KeyCode::KC_PGDN => Key::KEY_PAGEDOWN,
-        // ... all new keys ...
-    }
-}
-```
-
-**Files to modify:**
-- `src/keymap.rs` - Add ~140 new match arms (70 keys × 2 directions)
-
----
-
-### Phase 3: SOCD Generalization
-
-**Goal:** Support arbitrary opposing key pairs, not just WASD
-
-#### 3.1 Dynamic SOCD State (`keymap.rs`)
-
-**Current (Hardcoded WASD):**
-```rust
-struct KeymapProcessor {
-    socd_w_held: bool,
-    socd_s_held: bool,
-    socd_a_held: bool,
-    socd_d_held: bool,
-    socd_last_vertical: Option<KeyCode>,
-    socd_last_horizontal: Option<KeyCode>,
-    socd_active_keys: [Option<KeyCode>; 2],
-}
-
-const fn socd_handle_press(&mut self, keycode: KeyCode) -> [Option<KeyCode>; 2] {
-    match keycode {
-        KeyCode::KC_W => { self.socd_w_held = true; ... }
-        KeyCode::KC_S => { self.socd_s_held = true; ... }
-        KeyCode::KC_A => { self.socd_a_held = true; ... }
-        KeyCode::KC_D => { self.socd_d_held = true; ... }
-        _ => {}
-    }
-}
-```
-
-**Target (Generic):**
-```rust
-struct SocdPair {
-    key1: KeyCode,
-    key2: KeyCode,
-    key1_held: bool,
-    key2_held: bool,
-    last_input: KeyCode,
-    active_key: Option<KeyCode>,
-}
-
-struct KeymapProcessor {
-    // Build from config at initialization
-    socd_pairs: HashMap<KeyCode, SocdPair>,  // Key -> its pair info
-    // Remove: socd_w_held, socd_s_held, socd_a_held, socd_d_held, etc.
-}
-
-impl KeymapProcessor {
-    pub fn new(config: &Config) -> Self {
-        let mut socd_pairs = HashMap::new();
-        
-        // Extract SOCD pairs from config
-        for (keycode, action) in &config.remaps {
-            if let Action::Socd { this_key, opposing_key } = action {
-                // Create bidirectional mapping
-                socd_pairs.insert(*keycode, SocdPair {
-                    key1: *this_key,
-                    key2: *opposing_key,
-                    key1_held: false,
-                    key2_held: false,
-                    last_input: *this_key,
-                    active_key: None,
-                });
-            }
-        }
-        
-        // Also check game_mode and layers for SOCD
-        // ...
-        
-        Self {
-            socd_pairs,
-            // ...
-        }
-    }
-    
-    fn socd_handle_press(&mut self, keycode: KeyCode) -> ProcessResult {
-        if let Some(pair) = self.socd_pairs.get_mut(&keycode) {
-            // Generic SOCD logic
-            let old_active = pair.active_key;
-            
-            if keycode == pair.key1 {
-                pair.key1_held = true;
-                pair.last_input = pair.key1;
-            } else if keycode == pair.key2 {
-                pair.key2_held = true;
-                pair.last_input = pair.key2;
-            }
-            
-            // Compute new active key
-            let new_active = if pair.key1_held && !pair.key2_held {
-                Some(pair.key1)
-            } else if pair.key2_held && !pair.key1_held {
-                Some(pair.key2)
-            } else if pair.key1_held && pair.key2_held {
-                Some(pair.last_input)  // Last input priority
-            } else {
-                None
-            };
-            
-            pair.active_key = new_active;
-            
-            // Generate transition events
-            self.generate_socd_transition(old_active, new_active)
-        } else {
-            ProcessResult::None
-        }
-    }
-}
-```
-
-**Files to modify:**
-- `src/keymap.rs` - Complete SOCD logic rewrite (~200 lines)
-- Remove: All WASD-specific fields and functions
-- Add: Generic SocdPair struct and HashMap-based tracking
-
-#### 3.2 Config Validation
-
-**Add validation to ensure SOCD pairs are symmetric:**
-
-```rust
-impl Config {
-    pub fn validate(&self) -> Result<()> {
-        // Validate SOCD pairs
-        let mut socd_map: HashMap<KeyCode, KeyCode> = HashMap::new();
-        
-        for (key, action) in &self.remaps {
-            if let Action::Socd { this_key, opposing_key } = action {
-                if *key != *this_key {
-                    return Err(anyhow::anyhow!(
-                        "SOCD key mismatch: {:?} maps to Socd{{this_key: {:?}, ...}}", 
-                        key, this_key
-                    ));
-                }
-                socd_map.insert(*this_key, *opposing_key);
-            }
-        }
-        
-        // Check symmetry
-        for (key1, key2) in &socd_map {
-            if let Some(reverse) = socd_map.get(key2) {
-                if reverse != key1 {
-                    return Err(anyhow::anyhow!(
-                        "SOCD pair asymmetric: {:?} -> {:?}, but {:?} -> {:?}",
-                        key1, key2, key2, reverse
-                    ));
-                }
-            } else {
-                return Err(anyhow::anyhow!(
-                    "SOCD missing reverse pair: {:?} -> {:?}, but {:?} not defined",
-                    key1, key2, key2
-                ));
-            }
-        }
-        
-        Ok(())
-    }
-}
-```
-
-**Files to modify:**
-- `src/config.rs` - Add validate() method
-
----
-
-### Phase 4: HR Mod Generalization
-
-**Goal:** Remove key restrictions, support HR mods on ANY key
-
-#### 4.1 Remove Bit-Flag Optimization (`keymap.rs`)
-
-**Current (Limited to 8 keys):**
-```rust
-struct KeymapProcessor {
-    pending_hrm: u8,  // Bit flags for ASDF JKL;
-    hrm_last_tap: [Option<Instant>; 8],  // Fixed array
-}
-
-const fn keycode_to_hrm_bit(keycode: KeyCode) -> Option<u8> {
-    match keycode {
-        KeyCode::KC_A => Some(0),
-        KeyCode::KC_S => Some(1),
-        KeyCode::KC_D => Some(2),
-        KeyCode::KC_F => Some(3),
-        KeyCode::KC_J => Some(4),
-        KeyCode::KC_K => Some(5),
-        KeyCode::KC_L => Some(6),
-        KeyCode::KC_SCLN => Some(7),
-        _ => None,  // ❌ Other keys can't be HR mods
-    }
-}
-```
-
-**Target (Generic):**
-```rust
-struct KeymapProcessor {
-    pending_hrm: HashSet<KeyCode>,  // Any key can be pending
-    hrm_last_tap: HashMap<KeyCode, Instant>,  // Any key can be double-tapped
-}
-
-impl KeymapProcessor {
-    fn has_pending_hrm(&self) -> bool {
-        !self.pending_hrm.is_empty()
-    }
-    
-    fn set_hrm_pending(&mut self, keycode: KeyCode) {
-        self.pending_hrm.insert(keycode);
-    }
-    
-    fn clear_hrm_pending(&mut self, keycode: KeyCode) {
-        self.pending_hrm.remove(&keycode);
-    }
-    
-    fn is_double_tap(&self, keycode: KeyCode) -> bool {
-        if let Some(last_tap) = self.hrm_last_tap.get(&keycode) {
-            let elapsed = Instant::now().duration_since(*last_tap).as_millis() as u32;
-            return elapsed < self.double_tap_window_ms;
-        }
-        false
-    }
-    
-    fn set_hrm_last_tap(&mut self, keycode: KeyCode) {
-        self.hrm_last_tap.insert(keycode, Instant::now());
-    }
-}
-```
-
-**Files to modify:**
-- `src/keymap.rs` - Remove all bit-flag functions
-- `src/keymap.rs` - Replace with HashMap-based tracking (~50 lines changed)
-
-#### 4.2 Same for OVERLOAD
-
-**Current:**
-```rust
-struct KeymapProcessor {
-    overload_press_times: HashMap<KeyCode, Instant>,  // ✅ Already generic!
-    pending_overload: HashSet<KeyCode>,                // ✅ Already generic!
-}
-```
-
-**No changes needed** - OVERLOAD is already generic! ✅
-
----
-
----
-
-### Phase 6: Directory Restructure
-
-**Goal:** Better code organization in `event_processor/` subdirectory
-
-#### 6.1 New Directory Structure
-
-```
-src/
-├── event_processor/
-│   ├── mod.rs              # Re-exports + main entry point
-│   ├── processor.rs        # Main event loop (current event_processor.rs)
-│   ├── keymap.rs           # Keymap processing (current keymap.rs)
-│   ├── actions.rs          # Action processing logic
-│   ├── homerow_mods.rs     # HR mod logic (extracted from keymap.rs)
-│   ├── overload.rs         # OVERLOAD logic (extracted from keymap.rs)
-│   ├── socd.rs             # SOCD logic (extracted from keymap.rs)
-│   ├── command.rs          # Command execution logic
-│   ├── conversions.rs      # evdev ↔ KeyCode conversions (800+ lines)
-│   └── virtual_device.rs   # Virtual device creation and typing
-├── config.rs               # Config types
-├── config_manager.rs       # Config loading/hot-reload
-├── daemon.rs               # Main daemon
-├── keyboard_id.rs          # Keyboard identification
-├── niri.rs                 # Niri integration
-├── session_manager.rs      # Multi-user sessions
-├── ipc.rs                  # IPC server
-└── main.rs                 # CLI entry point
-```
-
-#### 6.2 Module Breakdown
-
-**`event_processor/mod.rs`:**
-```rust
-mod processor;
-mod keymap;
-mod actions;
-mod homerow_mods;
-mod overload;
-mod socd;
-mod command;
-mod conversions;
-mod virtual_device;
-
-pub use processor::start_event_processor;
-pub use keymap::{KeymapProcessor, ProcessResult};
-pub use conversions::{evdev_to_keycode, keycode_to_evdev};
-```
-
-**`event_processor/processor.rs`:**
-- Current `event_processor.rs` content
-- Main event loop
-- Command handling (game mode, shutdown)
-
-**`event_processor/keymap.rs`:**
-- KeymapProcessor struct
-- Core key processing logic
-- Action lookup (game mode → layer → base)
-- Delegates to specialized modules
-
-**`event_processor/actions.rs`:**
-- Simple Key() action processing
-- TO() layer switching
-
-**`event_processor/homerow_mods.rs`:**
-- All HR mod logic
-- Double-tap detection
-- Permissive hold resolution
-- Extracted from keymap.rs (~150 lines)
-
-**`event_processor/overload.rs`:**
-- All OVERLOAD logic
-- Timing-based tap/hold
-- Extracted from keymap.rs (~80 lines)
-
-**`event_processor/socd.rs`:**
-- SocdPair struct
-- Generic SOCD resolution
-- LIP algorithm
-- Extracted from keymap.rs (~150 lines)
-
-**`event_processor/command.rs`:**
-```rust
-pub struct CommandRunner;
-
-impl CommandRunner {
-    pub fn execute(command: &str) {
-        std::thread::spawn(move || {
-            let _ = std::process::Command::new("/bin/sh")
-                .arg("-c")
-                .arg(command)
-                .spawn();
-        });
-    }
-} 
-        id: &str
-    ) -> ProcessResult { ... }
-}
-```
-
-**`event_processor/conversions.rs`:**
-- Move all 800+ lines of evdev ↔ KeyCode conversion functions
-- `evdev_to_keycode()`
-- `keycode_to_evdev()`
-
-**`event_processor/virtual_device.rs`:**
-- Virtual device creation
-- `type_string()` function
-- `char_to_key()` function
-- `release_all_keys()` function
-
-**Files to create:**
-- 9 new files in `event_processor/` directory
-
-**Files to modify:**
-- `src/event_processor.rs` → Move to `event_processor/processor.rs`
-- `src/keymap.rs` → Split into multiple files in `event_processor/`
-
----
-
-### Phase 7: Testing & Validation
-
-#### 7.1 Unit Tests
-
-**Add tests for:**
-- Layer lookup resolution
-- SOCD pair resolution for various inputs
-- HR mod permissive hold
-- Command execution
-- KeyCode conversions (all 150 keys)
-
-**Test files to create:**
-```
-tests/
-├── layer_tests.rs
-├── socd_tests.rs
-├── homerow_mod_tests.rs
-├── command_tests.rs
-└── conversion_tests.rs
-```
-
-#### 7.2 Integration Tests
-
-**Test scenarios:**
-1. Load config with custom layers
-2. Press keys in various layers
-3. Test SOCD with arrow keys and multiple opposing keys
-4. Test HR mods on non-home-row keys
-5. Test command execution
-6. Test all media/numpad keys
-
-#### 7.3 Migration Guide
-
-**Breaking changes for users:**
-1. Layer names change from `L_NAV` to `"nav"`
-2. SOCD syntax changes to stack-based: `SOCD(key, [opposing_keys...])`
-3. Password action replaced with `CMD()` for arbitrary commands
-
-**Create migration script:**
-```bash
-#!/bin/bash
-# migrate_config.sh - Automatically migrate old configs to new format
-
-sed -i 's/L_NAV/"nav"/g' config.ron
-sed -i 's/L_NUM/"num"/g' config.ron
-# ... etc
-```
-
----
-
-## Implementation Order
-
-### Priority 1 (Core Functionality) - Do First
-
-1. ✅ **Layer system refactor** - Most impactful for customization
-2. ✅ **Action type updates** - Required for SOCD and CMD
-3. ✅ **Command runner** - Execute arbitrary shell commands
-
-### Priority 2 (Expand Capabilities) - Do Second
-
-5. **KeyCode expansion** - Add 70 new keys
-6. **evdev conversion expansion** - Support all new keys
-7. **SOCD generalization** - Generic opposing pairs
-8. **HR mod generalization** - Remove key restrictions
-
-### Priority 3 (Polish) - Do Last
-
-9. **Directory restructure** - Better organization
-10. **Testing suite** - Comprehensive tests
-11. **Migration guide** - Help users upgrade
-12. **Update config.example.ron** - Showcase all features
+All phases (1-7) have been fully implemented. The codebase includes:
+
+- ✅ Generic string-based layers
+- ✅ Generic SOCD with any opposing key pairs
+- ✅ MT (Mod-Tap) with any key support
+- ✅ 150+ KeyCodes (letters, numbers, modifiers, F-keys, navigation, numpad, media, international)
+- ✅ Full SOCD state management with HashMap
+- ✅ Adaptive timing with predictive scoring
+- ✅ Directory restructure in `event_processor/`
 
 ---
 

@@ -80,14 +80,11 @@ impl DaemonDisplay {
     }
 
     fn status_str(kbd: &crate::ipc::KeyboardInfo) -> String {
-        if kbd.enabled {
-            if kbd.enabled_by_portless {
-                "✓ Enabled (no explicit port)".to_string()
-            } else {
-                "✓ Enabled".to_string()
-            }
-        } else {
-            "○ Disabled".to_string()
+        match (&kbd.enabled, &kbd.matched_rule) {
+            (true, Some(rule)) => format!("✓ Enabled by \"{}\"", rule),
+            (true, None) => "✓ Enabled implicitly".to_string(),
+            (false, Some(rule)) => format!("○ Disabled by \"{}\"", rule),
+            (false, None) => "○ Disabled implicitly".to_string(),
         }
     }
 
@@ -116,14 +113,11 @@ impl DaemonDisplay {
 
         // Data rows
         for kbd in keyboards {
-            let status = if kbd.enabled {
-                if kbd.enabled_by_portless {
-                    "✓ Enabled (no explicit port)".bright_green()
-                } else {
-                    "✓ Enabled".bright_green()
-                }
-            } else {
-                "○ Disabled".dimmed()
+            let status = match (&kbd.enabled, &kbd.matched_rule) {
+                (true, Some(rule)) => format!("✓ Enabled by \"{}\"", rule).bright_green(),
+                (true, None) => "✓ Enabled implicitly".bright_green(),
+                (false, Some(rule)) => format!("○ Disabled by \"{}\"", rule).dimmed(),
+                (false, None) => "○ Disabled implicitly".dimmed(),
             };
 
             println!(
@@ -139,14 +133,11 @@ impl DaemonDisplay {
 
     fn print_keyboard_list_paragraph(&self, keyboards: &[crate::ipc::KeyboardInfo]) {
         for kbd in keyboards {
-            let status = if kbd.enabled {
-                if kbd.enabled_by_portless {
-                    "✓ Enabled (no explicit port)".bright_green()
-                } else {
-                    "✓ Enabled".bright_green()
-                }
-            } else {
-                "○ Disabled".dimmed()
+            let status = match (&kbd.enabled, &kbd.matched_rule) {
+                (true, Some(rule)) => format!("✓ Enabled by \"{}\"", rule).bright_green(),
+                (true, None) => "✓ Enabled implicitly".bright_green(),
+                (false, Some(rule)) => format!("○ Disabled by \"{}\"", rule).dimmed(),
+                (false, None) => "○ Disabled implicitly".dimmed(),
             };
 
             println!("    - {} ({})", kbd.name.bright_white(), status);

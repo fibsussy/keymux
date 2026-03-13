@@ -126,17 +126,35 @@
     // KEYBOARD SELECTION
     // ============================================================================
     
-    enabled_keyboards: None,
+    enabled_keyboards: [
+        "*",                      // enable all by default
+        // "6913",                   // enable keyboard with 6913 in ID (shorthand)
+        // "Keychron Lemokey X1",   // enable by keyboard name
+        // "1234": Enable,          // explicit enable (map syntax)
+        // "event3": Disable,       // disable by event file (map syntax)
+        // ("1234", "Enable"),      // explicit enable (tuple syntax)
+        // ("6789", "Disable"),     // disable this partial ID (tuple syntax)
+    ],
     
     // Which keyboards to process:
-    // - None: Process all keyboards (recommended)
-    // - Some([...]): Only process specific keyboards by ID
+    // - absent: Enable all keyboards (equivalent to ["*"])
+    // - None: Disable all (no keyboards enabled)
+    // - ["*"]: Enable all keyboards
+    // - ["1234", "5678"]: Enable keyboards matching these patterns
+    // - ["*", "1234": Disable]: Enable all except 1234
     //
-    // Example:
-    // enabled_keyboards: Some([
-    //     "1234:5678:0100:0003",
-    //     "2e3c:c365:0110:0003",
-    // ]),
+    // Syntax (both work):
+    // - Map style: "pattern": Enable, "pattern": Disable
+    // - Tuple style: ("pattern", "Enable"), ("pattern", "Disable") 
+    // - Bare string: "1234" = enable keyboard matching 1234
+    //
+    // Matching rules:
+    // - "*" matches all keyboards (glob)
+    // - "6913" matches any ID containing 6913 (partial match)
+    // - "event17" matches device at /dev/input/event17
+    // - "1234@3-4.2" matches exact ID with port
+    // - "Keyboard Name" matches keyboard name
+    // - "Keyboard Name" matches keyboard name
 
     // ============================================================================
     // BASE LAYER REMAPS
