@@ -5,8 +5,11 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
+    container: archlinux:latest
     steps:
+      - name: Install system dependencies
+        run: pacman -Syu --noconfirm base-devel git rust
       - uses: actions/checkout@v5
       - name: Build binary
         run: cargo build --release
