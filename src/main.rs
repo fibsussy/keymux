@@ -46,6 +46,18 @@ fn main() -> Result<()> {
         Some(cli::Commands::NiriDaemon) => {
             keymux::niri::run_niri_daemon()?;
         }
+        Some(cli::Commands::HyprlandDaemon) => {
+            keymux::hyprland::run_hyprland_daemon()?;
+        }
+        Some(cli::Commands::SwayDaemon) => {
+            keymux::hyprland::run_sway_daemon()?;
+        }
+        Some(cli::Commands::I3Daemon) => {
+            keymux::x11::run_i3_daemon()?;
+        }
+        Some(cli::Commands::BspwmDaemon) => {
+            keymux::x11::run_bspwm_daemon()?;
+        }
         Some(cli::Commands::List) => {
             list::run_list()?;
         }
@@ -202,7 +214,7 @@ fn handle_dynamic_completion(shell_name: &str) {
     // Get the binary path
     let bin_path = std::env::args_os()
         .next()
-        .map(|p| std::path::PathBuf::from(p))
+        .map(std::path::PathBuf::from)
         .unwrap_or_default();
     let bin_name = bin_path
         .file_name()

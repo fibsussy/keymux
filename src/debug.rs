@@ -48,7 +48,7 @@ pub fn run_debug(config_path: Option<&std::path::Path>) -> Result<()> {
     println!();
 
     // Config info
-    ConfigDisplay::new(config_path.clone()).print_config_info();
+    ConfigDisplay::new(config_path).print_config_info();
 
     // Device watching info
     DeviceDisplay::new().print_device_watching();

@@ -1,22 +1,21 @@
 use crate::config::GameMode;
 use crate::ipc::{send_request, IpcRequest, IpcResponse};
-use crate::niri;
-use crate::ui::window::{get_all_windows, GameModeState};
 use crate::window_manager::WindowManagerEvent::WindowFocusChanged;
+use crate::x11;
 use anyhow::Result;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use tracing::{error, info, warn};
 
-pub fn run_niri_daemon() -> Result<()> {
+pub fn run_i3_daemon() -> Result<()> {
     tracing_subscriber::fmt()
         .with_target(false)
         .with_thread_ids(false)
         .with_level(true)
         .init();
 
-    info!("Starting keymux-niri watcher");
+    info!("Starting keymux-i3 watcher");
 
     if !GameMode::auto_detect_enabled() {
         error!("Automatic game mode detection is disabled in config");
@@ -24,28 +23,23 @@ pub fn run_niri_daemon() -> Result<()> {
         return Ok(());
     }
 
-    if !niri::is_niri_available() {
-        error!("Niri socket not found - is Niri running?");
-        error!("This daemon requires Niri window manager");
+    if !x11::is_i3_available() {
+        error!("i3 socket not found - is i3 running?");
+        error!("This daemon requires i3 window manager");
         return Ok(());
     }
 
-    info!("Niri detected, starting window focus monitor");
+    info!("i3 detected, starting window focus monitor");
 
-    let (niri_tx, niri_rx) = mpsc::channel();
-    niri::start_niri_monitor_sync(niri_tx);
+    let (i3_tx, i3_rx) = mpsc::channel();
+    x11::start_i3_monitor_sync(i3_tx);
 
     let mut current_game_mode = false;
 
     loop {
-        match niri_rx.recv_timeout(Duration::from_millis(100)) {
+        match i3_rx.recv_timeout(Duration::from_millis(100)) {
             Ok(WindowFocusChanged(_window_info)) => {
-                let should_enable = get_all_windows().is_ok_and(|windows| {
-                    windows
-                        .iter()
-                        .find(|w| w.is_focused)
-                        .is_some_and(|w| matches!(w.game_mode_state(), GameModeState::GameMode(_)))
-                });
+                let should_enable = x11::should_enable_gamemode(&_window_info);
 
                 if should_enable != current_game_mode {
                     current_game_mode = should_enable;
@@ -70,7 +64,7 @@ pub fn run_niri_daemon() -> Result<()> {
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                error!("Niri monitor died, exiting");
+                error!("i3 monitor died, exiting");
                 break;
             }
         }
@@ -78,6 +72,6 @@ pub fn run_niri_daemon() -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
 
-    info!("Niri watcher stopped");
+    info!("i3 watcher stopped");
     Ok(())
 }

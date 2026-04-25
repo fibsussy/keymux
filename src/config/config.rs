@@ -6,20 +6,16 @@ use std::collections::HashMap;
 /// Enable or Disable action for a keyboard entry
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum EnableDisable {
+    #[default]
     Enable,
     Disable,
 }
 
-impl Default for EnableDisable {
-    fn default() -> Self {
-        Self::Enable
-    }
-}
-
 /// A single entry in the enabled_keyboards list
 /// Can be a bare string (defaults to Enable) or "pattern": Enable/Disable for explicit action
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum EnabledKeyboardEntry {
     /// Explicit enable/disable with syntax: "1234": Enable or "1234": Disable
     Explicit(String, EnableDisable),
@@ -106,7 +102,7 @@ impl EnabledKeyboardEntry {
     }
 
     /// Get the enable/disable action
-    pub fn action(&self) -> EnableDisable {
+    pub const fn action(&self) -> EnableDisable {
         match self {
             Self::Explicit(_, action) => *action,
             Self::Bare(_) => EnableDisable::Enable,
@@ -116,13 +112,13 @@ impl EnabledKeyboardEntry {
 
 impl From<String> for EnabledKeyboardEntry {
     fn from(s: String) -> Self {
-        EnabledKeyboardEntry::Bare(s)
+        Self::Bare(s)
     }
 }
 
 impl From<&str> for EnabledKeyboardEntry {
     fn from(s: &str) -> Self {
-        EnabledKeyboardEntry::Bare(s.to_string())
+        Self::Bare(s.to_string())
     }
 }
 
@@ -442,7 +438,7 @@ impl Default for MtConfig {
 
 /// Wrapper to track if enabled_keyboards was explicitly set in config
 /// This allows distinguishing between "field absent" vs "field set to None"
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum EnabledKeyboards {
     /// Field explicitly set to None (disable all)
@@ -457,7 +453,7 @@ pub enum EnabledKeyboards {
 
 impl EnabledKeyboards {
     /// Check if this is ExplicitNone (field was set to None)
-    pub fn is_explicit_none(&self) -> bool {
+    pub const fn is_explicit_none(&self) -> bool {
         matches!(self, Self::ExplicitNone | Self::SomeNone)
     }
 
@@ -595,7 +591,7 @@ impl Config {
         let re_enabled = Regex::new(r#""([^"]+)"\s*:\s*(\w+)"#).unwrap();
 
         let mut result = String::with_capacity(content.len() * 2);
-        let mut last_end = 0;
+        let last_end = 0;
 
         // Find and preprocess enabled_keyboards array
         if let Some((arr_start, arr_end)) = Self::find_enabled_keyboards_array(content) {
@@ -605,8 +601,8 @@ impl Config {
             let after_array = &content[arr_end..];
 
             // Do KC_* preprocessing on content before array (original logic)
-            let re_kc = Regex::new(r"\b(KC_[A-Z0-9_]+)\b").unwrap();
-            let processed_before = Self::preprocess_kc_only(&before_array);
+            let _re_kc = Regex::new(r"\b(KC_[A-Z0-9_]+)\b").unwrap();
+            let processed_before = Self::preprocess_kc_only(before_array);
             result.push_str(&processed_before);
 
             // Preprocess the array content - convert Enable->"Enable", Disable->"Disable"
@@ -730,9 +726,7 @@ impl Config {
         // Check the EnabledKeyboards wrapper (normalize first to handle legacy Some* variants)
         match self.enabled_keyboards.normalize() {
             // ExplicitNone/SomeNone means field was set to None → disable all
-            EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => {
-                return false;
-            }
+            EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => false,
             // List/SomeList of entries - apply matching rules
             EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => {
                 // If list is empty, disable all
@@ -798,7 +792,7 @@ impl Config {
                 }
 
                 // Return the final action, or true if no matches (enable by default for explicit items)
-                return final_action.unwrap_or(EnableDisable::Enable) == EnableDisable::Enable;
+                final_action.unwrap_or(EnableDisable::Enable) == EnableDisable::Enable
             }
         }
     }

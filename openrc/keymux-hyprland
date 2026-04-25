@@ -1,0 +1,35 @@
+#!/sbin/openrc-run
+
+name="keymux-hyprland"
+description="Keyboard Middleware Hyprland Window Watcher"
+command="/usr/bin/keymux"
+command_args="hyprland-daemon"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/keymux-hyprland.log"
+error_log="/var/log/keymux-hyprland.err"
+
+depend() {
+    after display-manager
+    need hyprland
+}
+
+start_pre() {
+    checkpath --directory --owner root:root --mode 0755 /run
+    checkpath --directory --owner root:root --mode 0755 /var/log
+}
+
+start() {
+    ebegin "Starting ${name}"
+    start-stop-daemon --start --exec ${command} -- ${command_args} \
+        --pidfile ${pidfile} \
+        --stdout ${output_log} \
+        --stderr ${error_log}
+    eend $?
+}
+
+stop() {
+    ebegin "Stopping ${name}"
+    start-stop-daemon --stop --exec ${command} --pidfile ${pidfile}
+    eend $?
+}

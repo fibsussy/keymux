@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/keymux niri-daemon 2>&1

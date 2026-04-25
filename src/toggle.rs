@@ -7,7 +7,7 @@ use keymux::config::{Config, EnableDisable, EnabledKeyboardEntry, EnabledKeyboar
 use keymux::ipc::{send_request, IpcRequest, IpcResponse};
 use keymux::keyboard_id::{find_all_keyboards, KeyboardId};
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToggleAction {
     Toggle,
     Enable,
@@ -95,7 +95,7 @@ fn handle_cli_patterns(
     // Get current entries (normalize to handle legacy Some* variants)
     let current_entries = match config.enabled_keyboards.normalize() {
         EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => vec![],
-        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries.clone(),
+        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries,
     };
 
     let mut new_entries: Vec<EnabledKeyboardEntry> = Vec::new();
@@ -213,13 +213,13 @@ pub fn handle_toggle_patterns(
     // Get current enabled keyboards
     let current_entries = match config.enabled_keyboards.normalize() {
         EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => vec![],
-        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries.clone(),
+        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries,
     };
 
     // Determine which patterns to enable vs disable
     let mut enable_patterns: Vec<String> = Vec::new();
     let mut disable_patterns: Vec<String> = Vec::new();
-    let mut pattern_comments: std::collections::HashMap<String, String> =
+    let pattern_comments: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
     for pattern in &patterns {
@@ -297,9 +297,7 @@ pub fn handle_toggle_patterns(
 
         let current_after_enable = match config.enabled_keyboards.normalize() {
             EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => vec![],
-            EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => {
-                entries.clone()
-            }
+            EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries,
         };
 
         let final_entries = merge_and_deduplicate(
@@ -451,7 +449,7 @@ fn run_multi_select(
     // Get current entries for merging
     let current_entries: Vec<EnabledKeyboardEntry> = match config.enabled_keyboards.normalize() {
         EnabledKeyboards::ExplicitNone | EnabledKeyboards::SomeNone => vec![],
-        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries.clone(),
+        EnabledKeyboards::List(entries) | EnabledKeyboards::SomeList(entries) => entries,
     };
 
     // Handle "*" selection
@@ -481,7 +479,7 @@ fn run_multi_select(
 
     // Build comments mapping for multi-select
     let mut pattern_comments: HashMap<String, String> = HashMap::new();
-    for &(ref id, ref name) in items {
+    for (id, name) in items {
         let id_str = id.to_string();
         let base_id = id_str.split('@').next().unwrap_or(&id_str).to_string();
         pattern_comments.insert(base_id, name.clone());

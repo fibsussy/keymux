@@ -1,0 +1,2 @@
+#!/bin/sh
+exec /usr/bin/keymux i3-daemon 2>&1

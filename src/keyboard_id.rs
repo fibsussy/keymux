@@ -1,4 +1,3 @@
-
 use crate::keycode::KeyCode;
 use evdev::Device;
 use std::collections::HashMap;
@@ -187,7 +186,8 @@ pub fn find_all_keyboards() -> HashMap<KeyboardId, LogicalKeyboard> {
             let name = device.name().unwrap_or("unknown").to_string();
 
             // Skip virtual keyboards created by this daemon
-            if name.contains("Keyboard Middleware Virtual Keyboard") {
+            if name.contains("Keyboard Middleware Virtual Keyboard") || name.starts_with("keymux: ")
+            {
                 tracing::debug!("Skipping virtual keyboard: {}", name);
                 continue;
             }

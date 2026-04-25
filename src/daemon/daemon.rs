@@ -851,7 +851,9 @@ impl AsyncDaemon {
     }
 
     /// Start niri window monitor
-    fn start_niri_monitor(&self) -> tokio_mpsc::UnboundedReceiver<crate::niri::NiriEvent> {
+    fn start_niri_monitor(
+        &self,
+    ) -> tokio_mpsc::UnboundedReceiver<crate::window_manager::WindowManagerEvent> {
         let (tx, rx) = tokio_mpsc::unbounded_channel();
 
         if crate::niri::is_niri_available() {
@@ -1359,9 +1361,9 @@ impl AsyncDaemon {
     }
 
     /// Process a single niri event
-    async fn process_niri_event(&mut self, event: crate::niri::NiriEvent) {
+    async fn process_niri_event(&mut self, event: crate::window_manager::WindowManagerEvent) {
         match event {
-            crate::niri::NiriEvent::WindowFocusChanged(window_info) => {
+            crate::window_manager::WindowManagerEvent::WindowFocusChanged(window_info) => {
                 let should_enable = crate::niri::should_enable_gamemode(&window_info);
                 debug!("Niri window focus changed, game mode: {}", should_enable);
                 self.set_game_mode_all(should_enable).await;

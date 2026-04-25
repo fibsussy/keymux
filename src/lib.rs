@@ -3,12 +3,15 @@
 pub mod config;
 pub mod daemon;
 pub mod event_processor;
+pub mod hyprland;
 pub mod ipc;
 pub mod keyboard_id;
 pub mod keycode;
 pub mod niri;
 pub mod session_manager;
 pub mod ui;
+pub mod window_manager;
+pub mod x11;
 
 use std::path::PathBuf;
 

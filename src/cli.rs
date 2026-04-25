@@ -30,7 +30,7 @@ pub fn get_keyboard_completions() -> Vec<String> {
 /// Shell completion generator
 pub fn generate_completions(shell: Shell) {
     use clap::builder::styling::{AnsiColor, Styles};
-    use clap::CommandFactory;
+
     use clap_complete::generate;
     use std::io;
 
@@ -129,6 +129,22 @@ pub enum Commands {
     /// Run the niri window watcher daemon
     #[command(hide = true)]
     NiriDaemon,
+
+    /// Run the hyprland window watcher daemon
+    #[command(hide = true)]
+    HyprlandDaemon,
+
+    /// Run the sway window watcher daemon
+    #[command(hide = true)]
+    SwayDaemon,
+
+    /// Run the i3 window watcher daemon
+    #[command(hide = true)]
+    I3Daemon,
+
+    /// Run the bspwm window watcher daemon
+    #[command(hide = true)]
+    BspwmDaemon,
 
     /// List all detected keyboards
     List,

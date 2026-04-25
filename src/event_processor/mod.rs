@@ -283,15 +283,24 @@ fn create_virtual_device(physical_device: &Device, keyboard_name: &str) -> Resul
         }
     }
 
-    // Build virtual device
-    let virtual_device = VirtualDeviceBuilder::new()?
-        .name(&format!(
-            "Keyboard Middleware Virtual Keyboard ({keyboard_name})"
-        ))
-        .with_keys(&keys)?
-        .build()?;
+    let try_build = |name: &str| -> Result<VirtualDevice> {
+        Ok(VirtualDeviceBuilder::new()?
+            .name(name)
+            .with_keys(&keys)?
+            .build()?)
+    };
 
-    Ok(virtual_device)
+    // Try full name first, fall back to truncated if it fails (kernel name limit is 80 bytes)
+    let full_name = format!("keymux: {keyboard_name}");
+    try_build(&full_name).or_else(|_| {
+        let max_name_len = 80 - "keymux: ".len();
+        let truncated = if keyboard_name.len() > max_name_len {
+            format!("keymux: {}...", &keyboard_name[..max_name_len])
+        } else {
+            full_name
+        };
+        try_build(&truncated)
+    })
 }
 
 /// Release all keys on startup (before keymap exists) to fix hotplug stuck keys

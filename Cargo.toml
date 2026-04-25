@@ -1,6 +1,10 @@
 [package]
 name = "keymux"
+<<<<<<< Updated upstream
 version = "1.2.0"
+=======
+version = "1.2.1"
+>>>>>>> Stashed changes
 edition = "2021"
 
 [lib]
