@@ -197,88 +197,11 @@ pub fn spawn_event_monitor_sync<T: WindowManager + 'static>(
     });
 }
 
-use std::fs;
-
-fn check_is_game_env(pid: u32) -> bool {
-    let env_path = format!("/proc/{pid}/environ");
-    if let Ok(contents) = fs::read(&env_path) {
-        let env_str = String::from_utf8_lossy(&contents);
-        for var in env_str.split('\0') {
-            if var == "IS_GAME=1" {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn check_process_tree(process_id: u32) -> (bool, bool) {
-    let mut has_gamescope = false;
-    let mut has_gamemode = false;
-    let mut current_pid = process_id;
-
-    for _ in 0..10 {
-        let cmdline_path = format!("/proc/{current_pid}/cmdline");
-        if let Ok(contents) = fs::read(&cmdline_path) {
-            let cmdline = String::from_utf8_lossy(&contents);
-            let cmd_lower = cmdline.to_lowercase();
-
-            if cmd_lower.contains("gamescope") || cmd_lower.contains("custom-gamescope") {
-                has_gamescope = true;
-            }
-            if cmd_lower.contains("gamemode") || cmd_lower.contains("gamemoded") {
-                has_gamemode = true;
-            }
-        }
-
-        let stat_path = format!("/proc/{current_pid}/stat");
-        let parent_pid = fs::read_to_string(&stat_path).ok().and_then(|stat| {
-            let parts: Vec<&str> = stat.rsplitn(2, ')').collect();
-            if parts.len() == 2 {
-                parts[0].split_whitespace().nth(1)?.parse::<u32>().ok()
-            } else {
-                None
-            }
-        });
-
-        match parent_pid {
-            Some(parent) if parent > 1 => current_pid = parent,
-            _ => break,
-        }
-    }
-
-    (has_gamescope, has_gamemode)
-}
-
 pub fn default_should_enable_gamemode(window_info: &WindowInfo) -> bool {
-    if window_info.app_id.as_deref() == Some("gamescope") {
-        return true;
-    }
-
-    if let Some(app_id) = &window_info.app_id {
-        if app_id.starts_with("steam_app_") {
-            return true;
-        }
-    }
-
-    const GAME_APP_IDS: &[&str] = &["org.vinegarhq.Sober"];
-
-    if let Some(app_id) = &window_info.app_id {
-        if GAME_APP_IDS.contains(&app_id.as_str()) {
-            return true;
-        }
-    }
-
-    if let Some(pid) = window_info.pid {
-        if check_is_game_env(pid) {
-            return true;
-        }
-
-        let (has_gamescope, has_gamemode) = check_process_tree(pid);
-        if has_gamescope || has_gamemode {
-            return true;
-        }
-    }
-
-    false
+    crate::niri::gamemode_detection::detect_game_mode(
+        window_info.app_id.as_deref(),
+        window_info.pid,
+        window_info.title.as_deref(),
+    )
+    .is_game_mode()
 }

@@ -1,6 +1,8 @@
+pub mod gamemode_detection;
 pub mod niri;
 pub mod niri_daemon;
 
+pub use gamemode_detection::{detect_game_mode, GameModeState};
 pub use niri::{
     get_focused_window, is_niri_available, should_enable_gamemode, start_niri_monitor,
     start_niri_monitor_sync,

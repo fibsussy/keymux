@@ -1,7 +1,7 @@
 use crate::config::GameMode;
 use crate::ipc::{send_request, IpcRequest, IpcResponse};
 use crate::niri;
-use crate::ui::window::{get_all_windows, GameModeState};
+use crate::niri::gamemode_detection::detect_game_mode;
 use crate::window_manager::WindowManagerEvent::WindowFocusChanged;
 use anyhow::Result;
 use std::sync::mpsc;
@@ -39,13 +39,20 @@ pub fn run_niri_daemon() -> Result<()> {
 
     loop {
         match niri_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(WindowFocusChanged(_window_info)) => {
-                let should_enable = get_all_windows().is_ok_and(|windows| {
-                    windows
-                        .iter()
-                        .find(|w| w.is_focused)
-                        .is_some_and(|w| matches!(w.game_mode_state(), GameModeState::GameMode(_)))
-                });
+            Ok(WindowFocusChanged(window_info)) => {
+                let state = detect_game_mode(
+                    window_info.app_id.as_deref(),
+                    window_info.pid,
+                    window_info.title.as_deref(),
+                );
+                let should_enable = state.is_game_mode();
+
+                info!(
+                    "Window focus: app_id={:?}, pid={:?}, gamemode={:?}",
+                    window_info.app_id.as_deref().unwrap_or("(none)"),
+                    window_info.pid,
+                    state
+                );
 
                 if should_enable != current_game_mode {
                     current_game_mode = should_enable;

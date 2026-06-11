@@ -392,12 +392,7 @@ impl MtProcessor {
         tap_key: KeyCode,
         hold_key: KeyCode,
     ) -> Option<MtResolution> {
-        tracing::info!(
-            "ADAPTIVE: MT key pressed: {:?} (tap={:?}, hold={:?})",
-            keycode,
-            tap_key,
-            hold_key
-        );
+
 
         // Check for double-tap
         if self.config.double_tap_then_hold {
@@ -747,12 +742,7 @@ impl MtProcessor {
         let base_threshold = self.config.tapping_term_ms as f32;
         let target_margin = self.config.adaptive_target_margin_ms as f32;
 
-        tracing::info!(
-            "ADAPTIVE: Recording tap for {:?}: {:.1}ms (game_mode={})",
-            keycode,
-            duration_ms,
-            self.game_mode_active
-        );
+
 
         let stats = self
             .rolling_stats
@@ -761,12 +751,7 @@ impl MtProcessor {
 
         stats.update_tap(duration_ms, target_margin);
 
-        tracing::info!(
-            "ADAPTIVE: Updated stats: avg={:.1}ms, count={}, threshold={:.1}ms",
-            stats.avg_tap_duration,
-            stats.tap_sample_count,
-            stats.adaptive_threshold
-        );
+
     }
 
     /// Check if any keys are pending (for external permissive hold logic)
@@ -809,29 +794,12 @@ impl MtProcessor {
     /// Save adaptive timing stats to file
     pub fn save_stats(&self, path: &std::path::Path) -> Result<(), std::io::Error> {
         if !self.config.adaptive_timing {
-            tracing::info!("ADAPTIVE: Skipping save: adaptive_timing is disabled");
-            return Ok(()); // Don't save if adaptive timing is disabled
+            return Ok(());
         }
 
         // Skip save if we have no stats (prevents overwriting with empty data)
         if self.rolling_stats.is_empty() {
-            tracing::info!("ADAPTIVE: Skipping save: no stats collected yet");
             return Ok(());
-        }
-
-        tracing::info!(
-            "ADAPTIVE: Saving stats to {:?}: {} entries in HashMap",
-            path,
-            self.rolling_stats.len()
-        );
-        for (key, stats) in &self.rolling_stats {
-            tracing::info!(
-                "  {:?} -> avg={:.1}ms, count={}, threshold={:.1}ms",
-                key,
-                stats.avg_tap_duration,
-                stats.tap_sample_count,
-                stats.adaptive_threshold
-            );
         }
 
         // Load existing stats and merge with current stats
@@ -852,13 +820,7 @@ impl MtProcessor {
         }
 
         let json = serde_json::to_string_pretty(&merged_stats)?;
-        tracing::info!(
-            "ADAPTIVE: JSON length: {} bytes, writing to disk (merged {} total entries)...",
-            json.len(),
-            merged_stats.len()
-        );
         std::fs::write(path, json)?;
-        tracing::info!("ADAPTIVE: Save complete!");
         Ok(())
     }
 

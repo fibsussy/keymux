@@ -12,15 +12,10 @@ RestartSec=5
 Environment="RUST_LOG=info"
 
 # Security hardening
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-NoNewPrivileges=true
-RestrictNamespaces=true
+# NOTE: options that create mount namespaces (ProtectSystem, ProtectHome,
+# ProtectKernelTunables, ProtectKernelModules, ProtectControlGroups, etc.)
+# block /proc/{pid}/environ reads needed for IS_GAME=1 game mode detection.
 RestrictRealtime=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 
 [Install]
 WantedBy=graphical-session.target

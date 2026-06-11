@@ -411,7 +411,7 @@ impl AsyncDaemon {
     async fn load_user_configs(&mut self) {
         // Get active user UIDs (session state already refreshed by caller)
         let active_uids = self.get_active_user_uids().await;
-        info!("Active user UIDs: {:?}", active_uids);
+        debug!("Active user UIDs: {:?}", active_uids);
 
         for &uid in &active_uids {
             // Skip if already loaded
@@ -1078,7 +1078,7 @@ impl AsyncDaemon {
         // Step 1: Validate all configs before stopping anything
         info!("Validating configs...");
         let active_uids = self.get_active_user_uids().await;
-        info!("Active UIDs for validation: {:?}", active_uids);
+        debug!("Active UIDs for validation: {:?}", active_uids);
         let mut validation_errors: HashMap<u32, String> = HashMap::new();
 
         for &uid in &active_uids {
